@@ -1,0 +1,267 @@
+syntax = "proto3";
+package async;
+
+
+message ProcessAPI {        // API for starting the process and getting results
+    string name = 1;
+    string description = 2; // description of this API
+    string service = 3;     // service which this process belongs to
+    string input = 4;       // input type
+    string output = 5;      // output type
+    string state = 6;       // state type
+}
+
+message  Process {
+    enum Status { // state status is automatically set by API.
+        Invalid = 0;  // unset state to identify API misuse faster
+        Started = 1;
+        Running = 2;
+        Finished = 3;
+    }
+    string id = 1;               // id of the state, should not contain []byte{0} as a substring
+    string name = 2;
+    string service = 3;
+    Status  status = 4;
+    repeated Thread threads = 5;
+    bytes state = 6;             // When state != nil - the process is running. input should be nil
+    bytes input = 7;             // When input != nil - the process is considered started.  state & output should be nil
+    bytes output = 8;            // When output != nil - the process is considered finished. input should be nil
+    uint64 version = 9;          // version is used to track Process changes across time
+    uint64 updatedAt = 10;
+}
+
+
+message Thread {
+    enum Status { // state status is automatically set by API.
+        Invalid = 0; 
+        Blocked = 1;  // select is in blocking state and waiting for condition to occur
+        Unblocked = 2;       // select is unblocked. It is is ready to be processed       
+        Aborted = 3;         // process has finished before thread was unblocked     
+    }
+    string id = 1;            // threadID should be unique within Process
+    string process = 2;       // ID of the parent process
+    string service = 4;         // 'service' is used to divide unblocked thread consumers, so that processing of one service doesn't affect the other
+    Status status = 6;        
+    
+    Select select = 5;
+    Call call = 12;
+    
+    uint64 blockedAt = 8;   
+    uint64 unblockedAt = 9; 
+
+    // filled after unblocked
+    string toStatus = 13;
+}
+
+message Type {              // Types are needed to validate async operations (send/recv) and describe API's
+    string id = 1;          // if type is not backward-compatible - you have to create new type id
+    string description = 2;
+    bytes  jsonSchema = 3;  // all type updates should be backward-compatible. You can only add new fields.
+    uint64 version = 4;     // track updates to types
+}
+
+
+// Create new process using template
+message NewProcessReq {
+    Call  call = 1;
+}
+
+// Create new process directly
+message  PutProcessReq {
+    Process process = 1;
+}
+
+// Update existing process
+message  UpdateProcessReq {
+    Process process = 1;
+    uint64 lockId = 2;
+    uint64 unblockedAt = 3;
+}
+
+message  Select {
+    enum Result { // state status is automatically set by API.
+        Invalid = 0; 
+        OK = 1;  
+        Closed = 2; // operations on closed channels
+    }
+    
+    repeated Case cases = 1;
+    
+    // filled after unblocked
+    uint64 unblockedCase = 2;
+    bytes recvData = 3;    
+    Result result = 4;
+}
+
+message  Case  {
+    enum Op { // state status is automatically set by API.
+        Invalid = 0; 
+        Send = 1;       
+        Recv = 2;    
+        Time = 3;     // special op to simulate  case <-time.After():
+        Default = 5;
+    }
+    string toStatus = 1;
+    Op op = 2;
+    string chan = 3;
+    uint64 time = 4; // for Op_Time
+    bytes data = 5; // for Op_Send
+    string dataType = 6;  // for Op_Send
+}
+
+message  Call {
+    string id = 1;
+    string name = 2;
+    bytes input = 3;
+    string inputType = 4;
+    string outputType = 5;
+
+    // filled after unblocked
+    bytes output = 6;
+}
+
+
+
+message  Channel {
+    string id = 1;
+    string dataType = 2;
+    bool closed = 3;
+    uint64 bufSize = 4;
+    uint64 bufMaxSize = 5;
+}
+
+message  ChanSelect {
+    uint64 blockedAt = 1;
+    uint64 case = 2;    
+}
+
+message  WaitCallIndex {
+    uint64 blockedAt = 1;
+    string processesId = 2;
+}
+
+message  BufData {
+	//string Process     = 1;
+	//string Select    = 2; 
+	//string Group     = 3; 
+	//string ToStatus  = 4; 
+    string Chan = 1;
+	bytes Data       = 5; 
+    uint64 clock     = 6;
+}
+
+message Empty {
+}
+
+message RegisterProcessHandlerReq {
+    string service = 1;
+    int64 pool = 2;
+    int64 pollIntervalMs = 3;
+}
+
+message LockedProcess {
+    Process process = 1;
+    Thread thread = 2;
+    uint64 lockId = 3;
+}
+
+message MakeChanReq {
+    Channel chan = 1;
+}
+
+message CloseChanReq {
+    repeated string ids = 1;
+}
+
+message ListChansReq {
+    string id = 1;
+    string from = 2;
+    uint64 limit = 3;
+}
+
+message ListChansResp {
+    repeated Channel chans = 1;
+}
+
+message ListTypesReq {
+    string id = 1;
+    string from = 2;
+    uint64 limit = 3;
+}
+
+message ListTypesResp {
+    repeated Type types = 1;
+}
+
+message ListAPIsReq {
+    string id = 1;
+    string from = 2;
+    uint64 limit = 3;
+}
+
+message ListAPIsResp {
+    repeated ProcessAPI apis = 1;
+}
+
+message GetProcessReq {
+    string id = 1;
+}
+
+message LockProcessReq {
+    string id = 1;
+}
+
+message ListenProcessesUpdatesReq {
+    uint64 from = 1;
+    string service = 2;
+}
+
+message ProcessEvent {
+    Process process = 1;
+    Thread thread = 2;
+}
+
+service Runtime {
+
+    // Create new process using specified Input and API to call
+    rpc NewProcess(NewProcessReq) returns (Empty);
+
+    // Create new process directly without API
+    rpc PutProcess(PutProcessReq) returns (Empty);
+
+    // Update previously locked process with the new state
+    // This operation may fail if some of selects were removed, while being unblocked.
+    rpc UpdateProcess(UpdateProcessReq) returns (Empty);
+
+    // Listen for unblocked processes, process events and then updated processes.
+    // Only 1 client can receive a process at a time
+    // For each Process - all updates to it are executed one by one.
+    // If multiple clients connect with the same "Service" name - events are randomly distributed between them,
+    // however if one of the clients becomes slow - it may slowdown other clients with same "Service" name
+    // Clients with different "Service" name do not affect each other. They have separate execution queues and 
+    // update distribution pool
+    rpc RegisterProcessHandler(RegisterProcessHandlerReq) returns (stream LockedProcess);
+
+    // Get current process
+    rpc GetProcess(GetProcessReq) returns (Process);
+
+    // Manually lock process to change it's state via UpdateProcess
+    rpc LockProcess(LockProcessReq) returns (LockedProcess);
+
+    rpc MakeChan(MakeChanReq) returns (Empty);
+
+    rpc ListChans(ListChansReq) returns (ListChansResp);
+
+    rpc CloseChan(CloseChanReq) returns (Empty);
+
+    rpc PutType(Type) returns (Empty);
+
+    rpc ListTypes(ListTypesReq) returns (ListTypesResp);
+
+    rpc PutAPI(ProcessAPI) returns (Empty);
+    
+    rpc ListAPIs(ListAPIsReq) returns (ListAPIsResp);
+    
+    // Listen for updates states. You can use this to sync data with other DB's, for ex. Search / Reports / etc.
+    rpc ListenProcessesUpdates(ListenProcessesUpdatesReq) returns (stream ProcessEvent);
+}
