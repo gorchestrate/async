@@ -58,7 +58,7 @@ func (p *P) Service() string {
 func (p *P) resume(s interface{}) error {
 	switch p.process.Status {
 	case Process_Started:
-		err := p.call(s, "Start", p.process.Input)
+		err := p.call(s, "Main", p.process.Input)
 		if err != nil {
 			return err
 		}
@@ -83,9 +83,7 @@ func (p *P) resume(s interface{}) error {
 }
 
 func (p *P) call(s interface{}, name string, input []byte) error {
-	log.Print("NAME :", name, "", reflect.TypeOf(s))
 	method := reflect.ValueOf(s).MethodByName(name)
-	log.Print("Method :", method)
 	//TODO: method not found error
 	inputs := method.Type().NumIn()
 	if inputs != 1 && inputs != 2 {
@@ -149,6 +147,11 @@ func (p *P) checkNoDefault() {
 	}
 }
 
+// for readability
+func (p *P) Select() *P {
+	return p
+}
+
 func (p *P) After(after time.Duration) *P {
 	return p.At(time.Now().Add(after))
 }
@@ -167,7 +170,6 @@ func (p *P) To(cb interface{}) *P { // TODO: check data type, based on Channel i
 	to := GetFunctionName(cb)
 	to = to[strings.LastIndex(to, ".")+1:]
 	to = strings.TrimSuffix(to, "-fm")
-	log.Printf("To: %v", to)
 
 	method := reflect.ValueOf(p.procStruct).MethodByName(to)
 	if method.IsZero() {
