@@ -1,5 +1,6 @@
 syntax = "proto3";
-package async;
+package core;
+option go_package="async";
 
 
 message WorkflowAPI {        // API for starting the workflow and getting results
