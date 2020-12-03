@@ -2,16 +2,16 @@ syntax = "proto3";
 package async;
 
 
-message ProcessAPI {        // API for starting the process and getting results
+message WorkflowAPI {        // API for starting the workflow and getting results
     string name = 1;
     string description = 2; // description of this API
-    string service = 3;     // service which this process belongs to
+    string service = 3;     // service which this workflow belongs to
     string input = 4;       // input type
     string output = 5;      // output type
     string state = 6;       // state type
 }
 
-message  Process {
+message  Workflow {
     enum Status { // state status is automatically set by API.
         Invalid = 0;  // unset state to identify API misuse faster
         Started = 1;
@@ -23,10 +23,10 @@ message  Process {
     string service = 3;
     Status  status = 4;
     repeated Thread threads = 5;
-    bytes state = 6;             // When state != nil - the process is running. input should be nil
-    bytes input = 7;             // When input != nil - the process is considered started.  state & output should be nil
-    bytes output = 8;            // When output != nil - the process is considered finished. input should be nil
-    uint64 version = 9;          // version is used to track Process changes across time
+    bytes state = 6;             // When state != nil - the workflow is running. input should be nil
+    bytes input = 7;             // When input != nil - the workflow is considered started.  state & output should be nil
+    bytes output = 8;            // When output != nil - the workflow is considered finished. input should be nil
+    uint64 version = 9;          // version is used to track Workflow changes across time
     uint64 updatedAt = 10;
 }
 
@@ -35,12 +35,12 @@ message Thread {
     enum Status { // state status is automatically set by API.
         Invalid = 0; 
         Blocked = 1;  // select is in blocking state and waiting for condition to occur
-        Unblocked = 2;       // select is unblocked. It is is ready to be processed       
-        Aborted = 3;         // process has finished before thread was unblocked     
+        Unblocked = 2;       // select is unblocked. It is is ready to be workflowed       
+        Aborted = 3;         // workflow has finished before thread was unblocked     
     }
-    string id = 1;            // threadID should be unique within Process
-    string process = 2;       // ID of the parent process
-    string service = 4;         // 'service' is used to divide unblocked thread consumers, so that processing of one service doesn't affect the other
+    string id = 1;            // threadID should be unique within Workflow
+    string workflow = 2;       // ID of the parent workflow
+    string service = 4;         // 'service' is used to divide unblocked thread consumers, so that workflowing of one service doesn't affect the other
     Status status = 6;        
     
     Select select = 5;
@@ -61,19 +61,19 @@ message Type {              // Types are needed to validate async operations (se
 }
 
 
-// Create new process using template
-message NewProcessReq {
+// Create new workflow using template
+message NewWorkflowReq {
     Call  call = 1;
 }
 
-// Create new process directly
-message  PutProcessReq {
-    Process process = 1;
-}
+// Create new workflow directly
+//message  PutWorkflowReq {
+//    Workflow workflow = 1;
+//}
 
-// Update existing process
-message  UpdateProcessReq {
-    Process process = 1;
+// Update existing workflow
+message  UpdateWorkflowReq {
+    Workflow workflow = 1;
     uint64 lockId = 2;
     uint64 unblockedAt = 3;
 }
@@ -137,11 +137,11 @@ message  ChanSelect {
 
 message  WaitCallIndex {
     uint64 blockedAt = 1;
-    string processesId = 2;
+    string workflowsId = 2;
 }
 
 message  BufData {
-	//string Process     = 1;
+	//string Workflow     = 1;
 	//string Select    = 2; 
 	//string Group     = 3; 
 	//string ToStatus  = 4; 
@@ -153,14 +153,14 @@ message  BufData {
 message Empty {
 }
 
-message RegisterProcessHandlerReq {
+message RegisterWorkflowHandlerReq {
     string service = 1;
     int64 pool = 2;
     int64 pollIntervalMs = 3;
 }
 
-message LockedProcess {
-    Process process = 1;
+message LockedWorkflow {
+    Workflow workflow = 1;
     Thread thread = 2;
     uint64 lockId = 3;
 }
@@ -170,6 +170,10 @@ message MakeChanReq {
 }
 
 message CloseChanReq {
+    repeated string ids = 1;
+}
+
+message DeleteChanReq {
     repeated string ids = 1;
 }
 
@@ -200,53 +204,75 @@ message ListAPIsReq {
 }
 
 message ListAPIsResp {
-    repeated ProcessAPI apis = 1;
+    repeated WorkflowAPI apis = 1;
 }
 
-message GetProcessReq {
+message GetWorkflowReq {
     string id = 1;
 }
 
-message LockProcessReq {
+message LockWorkflowReq {
     string id = 1;
+    // TODO: Lock for specified amount of time
+    // TODO: allow to extend lock time
 }
 
-message ListenProcessesUpdatesReq {
+message ListenWorkflowsUpdatesReq {
     uint64 from = 1;
-    string service = 2;
+    string filter = 3;
 }
 
-message ProcessEvent {
-    Process process = 1;
+message FindWorkflowsReq {
+    uint64 from = 1;
+    uint64 to = 2;
+    uint64 limit = 3;
+    uint64 scanlimit = 5;
+    string filter = 4;
+}
+
+message FindWorkflowsResp {
+    repeated Workflow workflows = 1;
+}
+
+message WorkflowEvent {
+    Workflow workflow = 1;
     Thread thread = 2;
 }
 
+
 service Runtime {
 
-    // Create new process using specified Input and API to call
-    rpc NewProcess(NewProcessReq) returns (Empty);
+    // Create new workflow using specified Input and API to call
+    // If workflow is already created - error will be returned
+    rpc NewWorkflow(NewWorkflowReq) returns (Empty);
 
-    // Create new process directly without API
-    rpc PutProcess(PutProcessReq) returns (Empty);
+    // Create new workflow directly without API
+    // If workflow was already created - error will be returned
+    //rpc PutWorkflow(PutWorkflowReq) returns (Empty);
 
-    // Update previously locked process with the new state
+    // Update previously locked workflow with the new state
     // This operation may fail if some of selects were removed, while being unblocked.
-    rpc UpdateProcess(UpdateProcessReq) returns (Empty);
+    rpc UpdateWorkflow(UpdateWorkflowReq) returns (Empty);
 
-    // Listen for unblocked processes, process events and then updated processes.
-    // Only 1 client can receive a process at a time
-    // For each Process - all updates to it are executed one by one.
+    // Listen for unblocked workflows, workflow events and then updated workflows.
+    // Only 1 client can receive a workflow at a time
+    // For each Workflow - all updates to it are executed one by one.
     // If multiple clients connect with the same "Service" name - events are randomly distributed between them,
     // however if one of the clients becomes slow - it may slowdown other clients with same "Service" name
     // Clients with different "Service" name do not affect each other. They have separate execution queues and 
     // update distribution pool
-    rpc RegisterProcessHandler(RegisterProcessHandlerReq) returns (stream LockedProcess);
+    rpc RegisterWorkflowHandler(RegisterWorkflowHandlerReq) returns (stream LockedWorkflow);
 
-    // Get current process
-    rpc GetProcess(GetProcessReq) returns (Process);
+    // Get current workflow
+    rpc GetWorkflow(GetWorkflowReq) returns (Workflow);
 
-    // Manually lock process to change it's state via UpdateProcess
-    rpc LockProcess(LockProcessReq) returns (LockedProcess);
+    // Manually lock workflow to change it's state via UpdateWorkflow
+    rpc LockWorkflow(LockWorkflowReq) returns (LockedWorkflow);
+
+    // Listen for updates states. You can use this to sync data with other DB's, for ex. Search / Reports / etc.
+    rpc ListenWorkflowsUpdates(ListenWorkflowsUpdatesReq) returns (stream WorkflowEvent);
+
+    rpc FindWorkflows(FindWorkflowsReq) returns (FindWorkflowsResp);
 
     rpc MakeChan(MakeChanReq) returns (Empty);
 
@@ -254,14 +280,19 @@ service Runtime {
 
     rpc CloseChan(CloseChanReq) returns (Empty);
 
-    rpc PutType(Type) returns (Empty);
+    rpc DeleteChan(DeleteChanReq) returns (Empty);
 
+
+    rpc PutType(Type) returns (Empty);
+    
     rpc ListTypes(ListTypesReq) returns (ListTypesResp);
 
-    rpc PutAPI(ProcessAPI) returns (Empty);
-    
-    rpc ListAPIs(ListAPIsReq) returns (ListAPIsResp);
-    
-    // Listen for updates states. You can use this to sync data with other DB's, for ex. Search / Reports / etc.
-    rpc ListenProcessesUpdates(ListenProcessesUpdatesReq) returns (stream ProcessEvent);
+    rpc DeleteType(Type) returns (Empty);
+
+
+    rpc PutAPI(WorkflowAPI) returns (Empty);
+
+    rpc ListAPIs(ListAPIsReq) returns (ListAPIsResp);    
+
+    rpc DeleteAPI(WorkflowAPI) returns (Empty);    
 }

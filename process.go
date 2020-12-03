@@ -13,7 +13,7 @@ import (
 )
 
 type P struct {
-	process       *Process
+	process       *Workflow
 	resumedThread *Thread
 	newThread     *Thread
 	procStruct    interface{}
@@ -57,12 +57,12 @@ func (p *P) Service() string {
 
 func (p *P) resume(s interface{}) error {
 	switch p.process.Status {
-	case Process_Started:
+	case Workflow_Started:
 		err := p.call(s, "Main", p.process.Input)
 		if err != nil {
 			return err
 		}
-	case Process_Running:
+	case Workflow_Running:
 		var input []byte
 		switch {
 		case p.resumedThread.Call != nil:
@@ -120,17 +120,17 @@ func (p *P) Finish(result interface{}) *P {
 		panic(err)
 	}
 	p.process.Output = out
-	p.process.Status = Process_Finished
+	p.process.Status = Workflow_Finished
 	return p
 }
 
 func (p *P) lastSel() *Select {
 	if p.newThread == nil {
 		p.newThread = &Thread{
-			Id:      p.resumedThread.Id,
-			Process: p.resumedThread.Process,
-			Service: p.process.Service,
-			Status:  Thread_Blocked,
+			Id:       p.resumedThread.Id,
+			Workflow: p.resumedThread.Workflow,
+			Service:  p.process.Service,
+			Status:   Thread_Blocked,
 		}
 	}
 	if p.newThread.Select == nil {
@@ -228,10 +228,10 @@ func (p *P) Go(id string, f func(p *P)) {
 		}
 	}
 	t := &Thread{
-		Id:      id,
-		Process: p.resumedThread.Process,
-		Service: p.process.Service,
-		Status:  Thread_Blocked,
+		Id:       id,
+		Workflow: p.resumedThread.Workflow,
+		Service:  p.process.Service,
+		Status:   Thread_Blocked,
 	}
 	p.process.Threads = append(p.process.Threads, t)
 	newThread := &P{
@@ -265,10 +265,10 @@ func (p *P) Call(name string, input interface{}) *P {
 	}
 	if p.newThread == nil { // operation on same thread
 		p.newThread = &Thread{
-			Id:      p.resumedThread.Id,
-			Process: p.resumedThread.Process,
-			Service: p.process.Service,
-			Status:  Thread_Blocked,
+			Id:       p.resumedThread.Id,
+			Workflow: p.resumedThread.Workflow,
+			Service:  p.process.Service,
+			Status:   Thread_Blocked,
 		}
 	}
 	p.newThread.Call = &Call{

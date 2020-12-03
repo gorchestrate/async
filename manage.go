@@ -19,7 +19,7 @@ type Service struct {
 }
 
 type API struct {
-	API          *ProcessAPI
+	API          *WorkflowAPI
 	NewProcState func() interface{}
 }
 
@@ -27,22 +27,22 @@ type AsyncType interface {
 	Type() *Type
 }
 
-func handleReq(c RuntimeClient, req *LockedProcess, new interface{}) {
-	if req.Process.Status == Process_Running {
-		err := json.Unmarshal(req.Process.State, &new)
+func handleReq(c RuntimeClient, req *LockedWorkflow, new interface{}) {
+	if req.Workflow.Status == Workflow_Running {
+		err := json.Unmarshal(req.Workflow.State, &new)
 		if err != nil {
-			log.Printf("json parse: %v %v", err, req.Process.Id)
+			log.Printf("json parse: %v %v", err, req.Workflow.Id)
 			return
 		}
 	}
-	for i, t := range req.Process.Threads {
+	for i, t := range req.Workflow.Threads {
 		if req.Thread.Id == t.Id {
-			req.Process.Threads = append(req.Process.Threads[:i], req.Process.Threads[i+1:]...)
+			req.Workflow.Threads = append(req.Workflow.Threads[:i], req.Workflow.Threads[i+1:]...)
 		}
 	}
 	var counter int
 	p := P{
-		process:       req.Process,
+		process:       req.Workflow,
 		resumedThread: req.Thread,
 		procStruct:    new,
 		client:        c,
@@ -50,32 +50,32 @@ func handleReq(c RuntimeClient, req *LockedProcess, new interface{}) {
 	}
 	err := p.resume(new)
 	if err != nil {
-		log.Printf("process resume: %v %v", err, req.Process.Id)
+		log.Printf("process resume: %v %v", err, req.Workflow.Id)
 		return
 	}
 	s, err := json.Marshal(new)
 	if err != nil {
-		log.Printf("json marshal: %v %v", err, req.Process.Id)
+		log.Printf("json marshal: %v %v", err, req.Workflow.Id)
 		return
 	}
-	if req.Process.Status == Process_Started {
-		req.Process.Status = Process_Running
+	if req.Workflow.Status == Workflow_Started {
+		req.Workflow.Status = Workflow_Running
 	}
 	if p.newThread != nil {
-		req.Process.Threads = append(req.Process.Threads, p.newThread)
+		req.Workflow.Threads = append(req.Workflow.Threads, p.newThread)
 	}
-	req.Process.State = s
-	req.Process.Version++
+	req.Workflow.State = s
+	req.Workflow.Version++
 
-	ddd, _ := json.MarshalIndent(req.Process, "", " ")
+	ddd, _ := json.MarshalIndent(req.Workflow, "", " ")
 	log.Printf("SENT TO WORKFLOW SERVER: %v", string(ddd))
-	_, err = c.UpdateProcess(context.Background(), &UpdateProcessReq{
-		Process:     req.Process,
+	_, err = c.UpdateWorkflow(context.Background(), &UpdateWorkflowReq{
+		Workflow:    req.Workflow,
 		LockId:      req.LockId,
 		UnblockedAt: req.Thread.UnblockedAt,
 	})
 	if err != nil {
-		log.Printf("update process: %v %v", err, req.Process.Id)
+		log.Printf("update process: %v %v", err, req.Workflow.Id)
 		return
 	}
 }
@@ -139,7 +139,7 @@ func Manage(ctx context.Context, client RuntimeClient, ss ...Service) error {
 }
 
 func manage(ctx context.Context, client RuntimeClient, s Service) error {
-	stream, err := client.RegisterProcessHandler(ctx, &RegisterProcessHandlerReq{Service: s.Name, Pool: 1000, PollIntervalMs: 1})
+	stream, err := client.RegisterWorkflowHandler(ctx, &RegisterWorkflowHandlerReq{Service: s.Name, Pool: 1000, PollIntervalMs: 1})
 	if err != nil {
 		return err
 	}
@@ -158,9 +158,9 @@ func manage(ctx context.Context, client RuntimeClient, s Service) error {
 			}
 			// ddd, _ := json.MarshalIndent(req, "", " ")
 			// log.Printf("RECEIVED FROM WORKFLOW SERVER: %v", string(ddd))
-			api := apis[req.Process.Name]
+			api := apis[req.Workflow.Name]
 			if api.NewProcState == nil {
-				log.Printf("unexpected api request: %v", req.Process.Name)
+				log.Printf("unexpected api request: %v", req.Workflow.Name)
 				continue
 			}
 			go handleReq(client, req, api.NewProcState())

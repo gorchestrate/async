@@ -28,7 +28,7 @@ func (t *Time) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-func (s *Process) HasThread(id string) bool {
+func (s *Workflow) HasThread(id string) bool {
 	for _, sel := range s.Threads {
 		if sel.Id == id {
 			return true
@@ -37,7 +37,7 @@ func (s *Process) HasThread(id string) bool {
 	return false
 }
 
-func (s *Process) SetThread(new *Thread) (created bool) {
+func (s *Workflow) SetThread(new *Thread) (created bool) {
 	for i, sel := range s.Threads {
 		if sel.Id == new.Id {
 			s.Threads[i] = new
