@@ -2,7 +2,6 @@ syntax = "proto3";
 package core;
 option go_package="async";
 
-
 message WorkflowAPI {        // API for starting the workflow and getting results
     string name = 1;
     string description = 2; // description of this API
@@ -220,7 +219,7 @@ message LockWorkflowReq {
 
 message ListenWorkflowsUpdatesReq {
     uint64 from = 1;
-    string filter = 3;
+    string filter = 2;
 }
 
 message FindWorkflowsReq {
