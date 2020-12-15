@@ -12,8 +12,8 @@ import (
 	"golang.org/x/net/context"
 )
 
-type P struct {
-	process       *Workflow
+type W struct {
+	workflow      *Workflow
 	resumedThread *Thread
 	newThread     *Thread
 	procStruct    interface{}
@@ -21,11 +21,11 @@ type P struct {
 	counter       *int // generate stable ID's
 }
 
-func (p *P) NewID() string {
+func (p *W) NewID() string {
 	return fmt.Sprintf("%v_%v", p.resumedThread.UnblockedAt, p.counter)
 }
 
-func (p *P) MakeChan(t *Type, bufsize int) Channel {
+func (p *W) MakeChan(t *Type, bufsize int) Channel {
 	id := p.NewID()
 	ch := Channel{
 		Id:         id,
@@ -41,24 +41,24 @@ func (p *P) MakeChan(t *Type, bufsize int) Channel {
 	return ch
 }
 
-func (p *P) ID() string {
-	return p.process.Id
+func (p *W) ID() string {
+	return p.workflow.Id
 }
 
-// Name is a process name (not ID).
-func (p *P) Name() string {
-	return p.process.Name
+// Name is a workflow name (not ID).
+func (p *W) Name() string {
+	return p.workflow.Name
 }
 
-// Name is a process name (not ID).
-func (p *P) Service() string {
-	return p.process.Service
+// Name is a workflow name (not ID).
+func (p *W) Service() string {
+	return p.workflow.Service
 }
 
-func (p *P) resume(s interface{}) error {
-	switch p.process.Status {
+func (p *W) resume(s interface{}) error {
+	switch p.workflow.Status {
 	case Workflow_Started:
-		err := p.call(s, "Main", p.process.Input)
+		err := p.call(s, "Main", p.workflow.Input)
 		if err != nil {
 			return err
 		}
@@ -77,17 +77,17 @@ func (p *P) resume(s interface{}) error {
 			}
 		}
 	default:
-		return fmt.Errorf("unexpected resumed process status: %v", p.process.Status)
+		return fmt.Errorf("unexpected resumed workflow status: %v", p.workflow.Status)
 	}
 	return nil
 }
 
-func (p *P) call(s interface{}, name string, input []byte) error {
+func (p *W) call(s interface{}, name string, input []byte) error {
 	method := reflect.ValueOf(s).MethodByName(name)
 	//TODO: method not found error
 	inputs := method.Type().NumIn()
 	if inputs != 1 && inputs != 2 {
-		return fmt.Errorf("%v method %v should have input in format Thread_Status(p *P [,Input])", reflect.TypeOf(s), name)
+		return fmt.Errorf("%v method %v should have input in format Thread_Status(p *W [,Input])", reflect.TypeOf(s), name)
 	}
 
 	if inputs == 1 {
@@ -114,22 +114,22 @@ func (p *P) call(s interface{}, name string, input []byte) error {
 	return err.(error)
 }
 
-func (p *P) Finish(result interface{}) *P {
+func (p *W) Finish(result interface{}) *W {
 	out, err := json.Marshal(result)
 	if err != nil {
 		panic(err)
 	}
-	p.process.Output = out
-	p.process.Status = Workflow_Finished
+	p.workflow.Output = out
+	p.workflow.Status = Workflow_Finished
 	return p
 }
 
-func (p *P) lastSel() *Select {
+func (p *W) lastSel() *Select {
 	if p.newThread == nil {
 		p.newThread = &Thread{
 			Id:       p.resumedThread.Id,
 			Workflow: p.resumedThread.Workflow,
-			Service:  p.process.Service,
+			Service:  p.workflow.Service,
 			Status:   Thread_Blocked,
 		}
 	}
@@ -139,7 +139,7 @@ func (p *P) lastSel() *Select {
 	return p.newThread.Select
 }
 
-func (p *P) checkNoDefault() {
+func (p *W) checkNoDefault() {
 	for _, c := range p.lastSel().Cases {
 		if c.Op == Case_Default {
 			panic("default case should always be the last one")
@@ -148,15 +148,15 @@ func (p *P) checkNoDefault() {
 }
 
 // for readability
-func (p *P) Select() *P {
+func (p *W) Select() *W {
 	return p
 }
 
-func (p *P) After(after time.Duration) *P {
+func (p *W) After(after time.Duration) *W {
 	return p.At(time.Now().Add(after))
 }
 
-func (p *P) At(at time.Time) *P {
+func (p *W) At(at time.Time) *W {
 	p.checkNoDefault()
 	ls := p.lastSel()
 	ls.Cases = append(ls.Cases, &Case{
@@ -166,7 +166,7 @@ func (p *P) At(at time.Time) *P {
 	return p
 }
 
-func (p *P) To(cb interface{}) *P { // TODO: check data type, based on Channel in previous operation?
+func (p *W) To(cb interface{}) *W { // TODO: check data type, based on Channel in previous operation?
 	to := GetFunctionName(cb)
 	to = to[strings.LastIndex(to, ".")+1:]
 	to = strings.TrimSuffix(to, "-fm")
@@ -195,7 +195,7 @@ func (p *P) To(cb interface{}) *P { // TODO: check data type, based on Channel i
 	return p
 }
 
-func (p *P) Recv(channel Channel) *P {
+func (p *W) Recv(channel Channel) *W {
 	p.checkNoDefault()
 	ls := p.lastSel()
 	ls.Cases = append(ls.Cases, &Case{
@@ -205,7 +205,7 @@ func (p *P) Recv(channel Channel) *P {
 	return p
 }
 
-func (p *P) Send(channel Channel, data interface{}) *P {
+func (p *W) Send(channel Channel, data interface{}) *W {
 	p.checkNoDefault()
 	d, err := json.Marshal(data)
 	if err != nil {
@@ -221,8 +221,8 @@ func (p *P) Send(channel Channel, data interface{}) *P {
 	return p
 }
 
-func (p *P) Go(id string, f func(p *P)) {
-	for _, v := range p.process.Threads {
+func (p *W) Go(id string, f func(p *W)) {
+	for _, v := range p.workflow.Threads {
 		if v.Id == id {
 			panic("starting goroutine twice")
 		}
@@ -230,12 +230,12 @@ func (p *P) Go(id string, f func(p *P)) {
 	t := &Thread{
 		Id:       id,
 		Workflow: p.resumedThread.Workflow,
-		Service:  p.process.Service,
+		Service:  p.workflow.Service,
 		Status:   Thread_Blocked,
 	}
-	p.process.Threads = append(p.process.Threads, t)
-	newThread := &P{
-		process:       p.process,
+	p.workflow.Threads = append(p.workflow.Threads, t)
+	newThread := &W{
+		workflow:      p.workflow,
 		newThread:     t,
 		procStruct:    p.procStruct,
 		client:        p.client,
@@ -245,7 +245,7 @@ func (p *P) Go(id string, f func(p *P)) {
 	f(newThread)
 }
 
-func (p *P) Default() *P {
+func (p *W) Default() *W {
 	p.checkNoDefault()
 	ls := p.lastSel()
 	ls.Cases = append(ls.Cases, &Case{
@@ -258,7 +258,7 @@ func GetFunctionName(i interface{}) string {
 	return runtime.FuncForPC(reflect.ValueOf(i).Pointer()).Name()
 }
 
-func (p *P) Call(name string, input interface{}) *P {
+func (p *W) Call(name string, input interface{}) *W {
 	in, err := json.Marshal(input)
 	if err != nil {
 		panic(err)
@@ -267,7 +267,7 @@ func (p *P) Call(name string, input interface{}) *P {
 		p.newThread = &Thread{
 			Id:       p.resumedThread.Id,
 			Workflow: p.resumedThread.Workflow,
-			Service:  p.process.Service,
+			Service:  p.workflow.Service,
 			Status:   Thread_Blocked,
 		}
 	}

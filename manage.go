@@ -41,14 +41,14 @@ func handleReq(c RuntimeClient, req *LockedWorkflow, new interface{}) {
 		}
 	}
 	var counter int
-	p := P{
-		process:       req.Workflow,
+	w := W{
+		workflow:      req.Workflow,
 		resumedThread: req.Thread,
 		procStruct:    new,
 		client:        c,
 		counter:       &counter,
 	}
-	err := p.resume(new)
+	err := w.resume(new)
 	if err != nil {
 		log.Printf("process resume: %v %v", err, req.Workflow.Id)
 		return
@@ -61,8 +61,8 @@ func handleReq(c RuntimeClient, req *LockedWorkflow, new interface{}) {
 	if req.Workflow.Status == Workflow_Started {
 		req.Workflow.Status = Workflow_Running
 	}
-	if p.newThread != nil {
-		req.Workflow.Threads = append(req.Workflow.Threads, p.newThread)
+	if w.newThread != nil {
+		req.Workflow.Threads = append(req.Workflow.Threads, w.newThread)
 	}
 	req.Workflow.State = s
 	req.Workflow.Version++
