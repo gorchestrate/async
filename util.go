@@ -2,8 +2,6 @@ package async
 
 import (
 	"encoding/json"
-	"log"
-	"reflect"
 	"time"
 
 	"github.com/alecthomas/jsonschema"
@@ -48,14 +46,15 @@ func (s *Workflow) SetThread(new *Thread) (created bool) {
 	return true
 }
 
-func ReflectType(name string, t interface{}) *Type {
+func ReflectType(name string, t interface{}, version uint64, description string) *Type {
 	schema, err := jsonschema.Reflect(t).MarshalJSON()
 	if err != nil {
 		panic(err) // not expected
 	}
-	log.Print(reflect.TypeOf(t))
 	return &Type{
-		Id:         name,
-		JsonSchema: schema,
+		Id:          name,
+		JsonSchema:  schema,
+		Version:     version,
+		Description: description,
 	}
 }
