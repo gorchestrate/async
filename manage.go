@@ -25,6 +25,8 @@ type AsyncType interface {
 	Type() *Type
 }
 
+const None = "async.None"
+
 func logW(w *Workflow) *logrus.Entry {
 	return logrus.WithFields(logrus.Fields{
 		"module":     "gorchestrate-async",

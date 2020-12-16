@@ -176,7 +176,7 @@ func (p *W) To(cb interface{}) *W { // TODO: check data type, based on Channel i
 	if method.IsZero() {
 		panic(fmt.Sprintf("To status %v does not match any method", to))
 	}
-	inputType := ""
+	inputType := "async.None"
 	if method.Type().NumIn() > 1 {
 		inputType = reflect.New(method.Type().In(1)).Interface().(AsyncType).Type().Id
 	}
