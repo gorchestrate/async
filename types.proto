@@ -197,13 +197,13 @@ message ListTypesResp {
     repeated Type types = 1;
 }
 
-message ListAPIsReq {
+message ListWorkflowAPIsReq {
     string id = 1;
     string from = 2;
     uint64 limit = 3;
 }
 
-message ListAPIsResp {
+message ListWorkflowAPIsResp {
     repeated WorkflowAPI apis = 1;
 }
 
@@ -219,7 +219,7 @@ message LockWorkflowReq {
 
 message ListenWorkflowsUpdatesReq {
     uint64 from = 1;
-    string filter = 2;
+    string filter = 3;
 }
 
 message FindWorkflowsReq {
@@ -290,9 +290,9 @@ service Runtime {
     rpc DeleteType(Type) returns (Empty);
 
 
-    rpc PutAPI(WorkflowAPI) returns (Empty);
+    rpc PutWorkflowAPI(WorkflowAPI) returns (Empty);
 
-    rpc ListAPIs(ListAPIsReq) returns (ListAPIsResp);    
+    rpc ListWorkflowAPIs(ListWorkflowAPIsReq) returns (ListWorkflowAPIsResp);    
 
-    rpc DeleteAPI(WorkflowAPI) returns (Empty);    
+    rpc DeleteWorkflowAPI(WorkflowAPI) returns (Empty);    
 }

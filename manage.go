@@ -11,23 +11,22 @@ import (
 )
 
 type Service struct {
-	Name         string
-	Types        []*Type
-	APIs         []API
-	Init         func(ctx context.Context) error
-	SingletonRun func(ctx context.Context, c RuntimeClient) error
+	Name      string
+	Types     []*Type
+	Workflows []WorkflowDefinition
 }
 
-type API struct {
-	API          *WorkflowAPI
-	NewProcState func() interface{}
+type WorkflowDefinition struct {
+	API      *WorkflowAPI
+	Setup    func() (interface{}, error)
+	Teardown func(interface{}) error
 }
 
 type AsyncType interface {
 	Type() *Type
 }
 
-func handleReq(c RuntimeClient, req *LockedWorkflow, new interface{}) {
+func handleReq(c RuntimeClient, req *LockedWorkflow, new interface{}, teardown func(interface{}) error) {
 	if req.Workflow.Status == Workflow_Running {
 		err := json.Unmarshal(req.Workflow.State, &new)
 		if err != nil {
@@ -67,6 +66,14 @@ func handleReq(c RuntimeClient, req *LockedWorkflow, new interface{}) {
 	req.Workflow.State = s
 	req.Workflow.Version++
 
+	if teardown != nil {
+		err = teardown(new)
+		if err != nil {
+			log.Printf("error during workflow teardown: %v %v", req.Workflow.Id, err)
+			return
+		}
+	}
+
 	ddd, _ := json.MarshalIndent(req.Workflow, "", " ")
 	log.Printf("SENT TO WORKFLOW SERVER: %v", string(ddd))
 	_, err = c.UpdateWorkflow(context.Background(), &UpdateWorkflowReq{
@@ -88,9 +95,9 @@ func Manage(ctx context.Context, client RuntimeClient, ss ...Service) error {
 				return fmt.Errorf("put type: %v %v", v, err)
 			}
 		}
-		for _, v := range s.APIs {
+		for _, v := range s.Workflows {
 			log.Printf("PUT API: %v", v.API.Name)
-			_, err := client.PutAPI(ctx, v.API)
+			_, err := client.PutWorkflowAPI(ctx, v.API)
 			if err != nil {
 				return fmt.Errorf("put api: %v %v", v, err)
 			}
@@ -99,25 +106,7 @@ func Manage(ctx context.Context, client RuntimeClient, ss ...Service) error {
 
 	var wg sync.WaitGroup
 	for _, s := range ss {
-		wg.Add(2)
-		go func(s Service) {
-			defer wg.Done()
-			if s.SingletonRun == nil {
-				return
-			}
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				default:
-					err := s.SingletonRun(ctx, client)
-					if err != nil {
-						log.Printf("error in service %v run: %v ", s.Name, err)
-					}
-					time.Sleep(time.Second * 5)
-				}
-			}
-		}(s)
+		wg.Add(1)
 		go func(s Service) {
 			defer wg.Done()
 			for {
@@ -143,9 +132,8 @@ func manage(ctx context.Context, client RuntimeClient, s Service) error {
 	if err != nil {
 		return err
 	}
-
-	apis := map[string]API{}
-	for _, v := range s.APIs {
+	apis := map[string]WorkflowDefinition{}
+	for _, v := range s.Workflows {
 		apis[v.API.Name] = v
 	}
 	for {
@@ -159,11 +147,16 @@ func manage(ctx context.Context, client RuntimeClient, s Service) error {
 			// ddd, _ := json.MarshalIndent(req, "", " ")
 			// log.Printf("RECEIVED FROM WORKFLOW SERVER: %v", string(ddd))
 			api := apis[req.Workflow.Name]
-			if api.NewProcState == nil {
-				log.Printf("unexpected api request: %v", req.Workflow.Name)
+			if api.Setup == nil {
+				log.Printf("no setup code for struct: %v", req.Workflow.Id)
 				continue
 			}
-			go handleReq(client, req, api.NewProcState())
+			new, err := api.Setup()
+			if err != nil {
+				log.Printf("error during workflow setup: %v %v", req.Workflow.Id, err)
+				continue
+			}
+			go handleReq(client, req, new, api.Teardown)
 		}
 	}
 }
