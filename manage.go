@@ -3,6 +3,7 @@ package async
 import (
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/sirupsen/logrus"
 	"golang.org/x/net/context"
@@ -56,7 +57,34 @@ func handleReq(c RuntimeClient, req *LockedWorkflow, new interface{}, teardown f
 		client:        c,
 		counter:       &counter,
 	}
+
+	// process resume logic can take long time, so we will extend our lock periodically until resume is done
+	// there's no easy way to handle failure of extending the lock. In case it fails we will always have ambiguious situation
+	// of current process loosing connectivity to server. In this case we never know if process is hanging or working normally.
+	// If it's important for workflow to maintain lock for some duration - it's always possible to extend the lock on a server side for desired amount of time
+	resumeDone := make(chan struct{}, 1)
+	go func() {
+		t := time.NewTicker(time.Second * 10)
+		for {
+			select {
+			case <-t.C:
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+				_, err := c.ExtendLock(ctx, &ExtendLockReq{
+					Id:      req.Workflow.Id,
+					Lockid:  req.LockId,
+					Seconds: 30,
+				})
+				if err != nil {
+					logW(req.Workflow).Errorf("error extending lock: %v", err)
+				}
+				cancel()
+			case <-resumeDone:
+				return
+			}
+		}
+	}()
 	err := w.resume(new)
+	resumeDone <- struct{}{}
 	if err != nil {
 		logW(req.Workflow).Errorf("workflow resume: %v", err)
 		return

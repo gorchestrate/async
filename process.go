@@ -19,6 +19,7 @@ type W struct {
 	procStruct    interface{}
 	client        RuntimeClient
 	counter       *int // generate stable ID's
+	lockLeft      time.Duration
 }
 
 func (p *W) NewID() string {

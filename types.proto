@@ -213,6 +213,15 @@ message GetWorkflowReq {
 
 message LockWorkflowReq {
     string id = 1;
+    uint64 seconds = 2;
+    // TODO: Lock for specified amount of time
+    // TODO: allow to extend lock time
+}
+
+message ExtendLockReq {
+    string id = 1;
+    uint64 lockid = 2;
+    uint64 seconds = 3;
     // TODO: Lock for specified amount of time
     // TODO: allow to extend lock time
 }
@@ -268,6 +277,10 @@ service Runtime {
 
     // Manually lock workflow to change it's state via UpdateWorkflow
     rpc LockWorkflow(LockWorkflowReq) returns (LockedWorkflow);
+
+    // Manually lock workflow to change it's state via UpdateWorkflow
+    rpc ExtendLock(ExtendLockReq) returns (Empty);
+    
 
     // Listen for updates states. You can use this to sync data with other DB's, for ex. Search / Reports / etc.
     rpc ListenWorkflowsUpdates(ListenWorkflowsUpdatesReq) returns (stream WorkflowEvent);
