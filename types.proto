@@ -3,148 +3,117 @@ package core;
 option go_package="async";
 
 message WorkflowAPI {        // API for starting the workflow and getting results
-    string name = 1;
-    string description = 2; // description of this API
-    string service = 3;     // service which this workflow belongs to
-    string input = 4;       // input type
-    string output = 5;      // output type
-    string state = 6;       // state type
+    string name = 1;        // API name in format "%s()". For ex.  "OrderPizza()"
+    string service = 2;     // Service that will receive callback when workflow is unblocked
+    string input = 3;       // Type of the input
+    string output = 4;      // Type of the output
+    string state = 5;       // Type of the workflow states
 }
 
 message  Workflow {
-    enum Status { // state status is automatically set by API.
-        Invalid = 0;  // unset state to identify API misuse faster
-        Started = 1;
-        Running = 2;
-        Finished = 3;
+    enum Status {
+        Invalid = 0;
+        Started = 1;  // Initial Workflow Status
+        Running = 2;  // Workflow is in progress
+        Finished = 3; // Terminal Workflow status
     }
-    string id = 1;               // id of the state, should not contain []byte{0} as a substring
-    string name = 2;
-    string service = 3;
-    Status  status = 4;
-    repeated Thread threads = 5;
-    bytes state = 6;             // When state != nil - the workflow is running. input should be nil
-    bytes input = 7;             // When input != nil - the workflow is considered started.  state & output should be nil
-    bytes output = 8;            // When output != nil - the workflow is considered finished. input should be nil
-    uint64 version = 9;          // version is used to track Workflow changes across time
-    uint64 updatedAt = 10;
+    string ID = 1;               // id of the workflow instance
+    string API = 2;              // name of WorkflowAPI that this workflow was created from
+    string service = 3;          // Service that will receive callback when this workflow is unblocked
+    Status  status = 4;          // Current workflow status
+    repeated Thread threads = 5; // Workflow threads(goroutines). 
+    bytes state = 6;             // Current workflow state
+    bytes input = 7;             // Input that this workflow has received when it was created
+    bytes output = 8;            // Output of the workflow when it's finished
+    uint64 version = 9;          // Version is incremented each time workflow was updated
+    uint64 updatedAt = 10;       // Timestamp when process was updated last time
 }
 
 
 message Thread {
-    enum Status { // state status is automatically set by API.
+    enum Status {
         Invalid = 0; 
-        Blocked = 1;  // select is in blocking state and waiting for condition to occur
-        Unblocked = 2;       // select is unblocked. It is is ready to be workflowed       
-        Aborted = 3;         // workflow has finished before thread was unblocked     
+        Blocked = 1;    // Thread is blocked (waiting for 'select' or 'call' to unblock)
+        Unblocked = 2;  // Thread is unblocked ('select' or 'call' has finished). Unblocked threads will be processed by service via RegisterWorkflowHandler()
     }
-    string id = 1;            // threadID should be unique within Workflow
-    string workflow = 2;       // ID of the parent workflow
-    string service = 4;         // 'service' is used to divide unblocked thread consumers, so that workflowing of one service doesn't affect the other
-    Status status = 6;        
+    string ID = 1;         // Used to identify thread within workflow.
+    string workflow = 2;   // ID of the parent workflow. 
+    string service = 4;    // Service that will receive callback when this thread is unblocked
+    Status status = 6;     // Current thread status
     
-    Select select = 5;
-    Call call = 12;
+    Select select = 5;     // Thread is waiting for Select condition
+    Call call = 12;        // Thread is waiting for other workflow to finish
     
-    uint64 blockedAt = 8;   
-    uint64 unblockedAt = 9; 
+    uint64 blockedAt = 8;   // Timestamp when thread was blocked(created)
+    uint64 unblockedAt = 9; // Timestamp when thread was unblocked
 
-    // filled after unblocked
-    string toStatus = 13;
+    string callback = 13;   // Callback that will be called when this thread was finished
 }
 
 message Type {              // Types are needed to validate async operations (send/recv) and describe API's
-    string id = 1;          // if type is not backward-compatible - you have to create new type id
+    string ID = 1;          // if type is not backward-compatible - you have to create new type id
     string description = 2;
     bytes  jsonSchema = 3;  // all type updates should be backward-compatible. You can only add new fields.
     uint64 version = 4;     // track updates to types
 }
 
-
-// Create new workflow using template
-message NewWorkflowReq {
-    Call  call = 1;
-}
-
-// Create new workflow directly
-//message  PutWorkflowReq {
-//    Workflow workflow = 1;
-//}
-
-// Update existing workflow
 message  UpdateWorkflowReq {
-    Workflow workflow = 1;
-    uint64 lockId = 2;
-    uint64 unblockedAt = 3;
+    Workflow workflow = 1;  // New workflow state
+    uint64 lockID = 2;      // ID of lock that this state was locked with
+    uint64 unblockedAt = 3; // Original timestamp of the thread that was unblocked (to clean up)
 }
 
-message  Select {
-    enum Result { // state status is automatically set by API.
-        Invalid = 0; 
-        OK = 1;  
-        Closed = 2; // operations on closed channels
-    }
-    
+// Select is similar to 'select' in Go - it will block thread until one of the case conditions will be met
+message  Select { 
     repeated Case cases = 1;
+    uint64 unblockedCase = 2;  // index of case that was unblocked
+    bytes recvData = 3;        // data received (in case of Recv operation)
+    bool closed = 4;           // if send/recv was done on closed channel
     
-    // filled after unblocked
-    uint64 unblockedCase = 2;
-    bytes recvData = 3;    
-    Result result = 4;
+	//string Workflow     = 1; // TODO: maintain source workflow path?
+	//string Thread       = 2; 
+	//string Index        = 3; 
 }
 
 message  Case  {
-    enum Op { // state status is automatically set by API.
+    enum Op {
         Invalid = 0; 
-        Send = 1;       
-        Recv = 2;    
-        Time = 3;     // special op to simulate  case <-time.After():
-        Default = 5;
+        Send = 1;    // Send to channel
+        Recv = 2;    // Receive from channel
+        Time = 3;    // Wait for time (i.e. <-time.After() / time.NewTimer())
+        Default = 5; // Default case
     }
-    string toStatus = 1;
-    Op op = 2;
-    string chan = 3;
-    uint64 time = 4; // for Op_Time
-    bytes data = 5; // for Op_Send
-    string dataType = 6;  // for Op_Send
+    string callback = 1; // callback that will be called when this case fires
+    Op op = 2;           // send, recv, wait
+    string chan = 3;     // channel to send/recv
+    uint64 time = 4;     // time to wait for (Op_Time)
+    bytes data = 5;      // data to send (Op_Send)
+    string dataType = 6; // data type to send (Op_Send). This is needed to make sure that send data type matches channel type.
 }
 
 message  Call {
-    string id = 1;
-    string name = 2;
-    bytes input = 3;
-    string inputType = 4;
-    string outputType = 5;
+    string ID = 1;          // ID of new workflow. This is set by user to ensure 
+    string API = 2;         // WorkflowAPI to call
+    bytes input = 3;        // Workflow Input
+    string inputType = 4;   // Input type is needed to make sure it matches Workflow API input type
+    string outputType = 5;  // Output type is needed to make sure it matches Workflow API output type
 
-    // filled after unblocked
-    bytes output = 6;
+    bytes output = 6;       // Output of finished workflow
 }
-
-
 
 message  Channel {
-    string id = 1;
-    string dataType = 2;
-    bool closed = 3;
-    uint64 bufSize = 4;
-    uint64 bufMaxSize = 5;
+    string ID = 1;         // ID of channel
+    string dataType = 2;   // Channel data type
+    bool closed = 3;       // If channel is closed
+    uint64 bufMaxSize = 5; // Channel size (0 - unbuffered)
+    uint64 bufSize = 4;    // Current number of messages pending in a buffered channel
 }
 
-message  ChanSelect {
-    uint64 blockedAt = 1;
-    uint64 case = 2;    
-}
-
-message  WaitCallIndex {
-    uint64 blockedAt = 1;
-    string workflowsId = 2;
-}
-
+// For internal use
 message  BufData {
-	//string Workflow     = 1;
-	//string Select    = 2; 
-	//string Group     = 3; 
-	//string ToStatus  = 4; 
+	//string Workflow     = 1; // TODO: maintain source workflow path?
+	//string Thread       = 2; 
+	//string Index        = 3; 
     string Chan = 1;
 	bytes Data       = 5; 
     uint64 clock     = 6;
@@ -154,41 +123,44 @@ message Empty {
 }
 
 message RegisterWorkflowHandlerReq {
-    string service = 1;
-    int64 pool = 2;
-    int64 pollIntervalMs = 3;
+    string service = 1;               // Handle request for all Workflow with the same service name
+    int64 pool = 2;                   // Number of requests our service will handle concurrently
+    int64 pollIntervalMs = 3;         // How frequently we will poll for unblocked workflows
 }
 
-message LockedWorkflow {
-    Workflow workflow = 1;
-    Thread thread = 2;
-    uint64 lockId = 3;
-}
-
-message MakeChanReq {
-    Channel chan = 1;
+message LockedWorkflow {             
+    Workflow workflow = 1;            // Current workflow state
+    Thread thread = 2;                // Thread that was unblocked
+    uint64 lockID = 3;                // LockID that is used to track unblocked thread
 }
 
 message CloseChanReq {
-    repeated string ids = 1;
+    repeated string IDs = 1;          // IDs of channels to close
 }
 
 message DeleteChanReq {
-    repeated string ids = 1;
+    repeated string IDs = 1;          // IDs of channels to delete
+}
+
+
+message GetChanReq {
+    string ID = 1;                   
 }
 
 message ListChansReq {
-    string id = 1;
-    string from = 2;
+    string from = 2;              
     uint64 limit = 3;
 }
 
 message ListChansResp {
-    repeated Channel chans = 1;
+    repeated Channel chans = 1;      
+}
+
+message GetTypeReq {
+    string ID = 1;
 }
 
 message ListTypesReq {
-    string id = 1;
     string from = 2;
     uint64 limit = 3;
 }
@@ -197,46 +169,45 @@ message ListTypesResp {
     repeated Type types = 1;
 }
 
+message GetWorkflowAPIReq {
+    string ID = 1;
+}
+
 message ListWorkflowAPIsReq {
-    string id = 1;
     string from = 2;
     uint64 limit = 3;
 }
 
 message ListWorkflowAPIsResp {
-    repeated WorkflowAPI apis = 1;
+    repeated WorkflowAPI APIs = 1;
 }
 
 message GetWorkflowReq {
-    string id = 1;
+    string ID = 1;
 }
 
 message LockWorkflowReq {
-    string id = 1;
+    string ID = 1;       
     uint64 seconds = 2;
-    // TODO: Lock for specified amount of time
-    // TODO: allow to extend lock time
 }
 
 message ExtendLockReq {
-    string id = 1;
-    uint64 lockid = 2;
+    string ID = 1;
+    uint64 lockID = 2;
     uint64 seconds = 3;
-    // TODO: Lock for specified amount of time
-    // TODO: allow to extend lock time
 }
 
 message ListenWorkflowsUpdatesReq {
     uint64 from = 1;
-    string filter = 3;
+    string filter = 3; // Filter in GJSON expr format "[GJSON] == 'asdf'"
 }
 
 message FindWorkflowsReq {
     uint64 from = 1;
     uint64 to = 2;
     uint64 limit = 3;
-    uint64 scanlimit = 5;
-    string filter = 4;
+    uint64 scanlimit = 5; // limit number of keys scanned, useful to limit scan time with no matches
+    string filter = 4; // Filter in GJSON expr format "[GJSON] == 'asdf'"
 }
 
 message FindWorkflowsResp {
@@ -244,8 +215,8 @@ message FindWorkflowsResp {
 }
 
 message WorkflowEvent {
-    Workflow workflow = 1;
-    Thread thread = 2;
+    Workflow workflow = 1;     // Workflow state *after* unblocked thread was processed
+    Thread thread = 2;         // Thread that was unblocked
 }
 
 
@@ -253,7 +224,7 @@ service Runtime {
 
     // Create new workflow using specified Input and API to call
     // If workflow is already created - error will be returned
-    rpc NewWorkflow(NewWorkflowReq) returns (Empty);
+    rpc NewWorkflow(Call) returns (Empty);
 
     // Create new workflow directly without API
     // If workflow was already created - error will be returned
@@ -278,34 +249,42 @@ service Runtime {
     // Manually lock workflow to change it's state via UpdateWorkflow
     rpc LockWorkflow(LockWorkflowReq) returns (LockedWorkflow);
 
-    // Manually lock workflow to change it's state via UpdateWorkflow
+    // ExtendLock to ensure long-running operations are handled properly.
     rpc ExtendLock(ExtendLockReq) returns (Empty);
     
-
     // Listen for updates states. You can use this to sync data with other DB's, for ex. Search / Reports / etc.
     rpc ListenWorkflowsUpdates(ListenWorkflowsUpdatesReq) returns (stream WorkflowEvent);
 
+    // Simple query API for debugging purposes.
     rpc FindWorkflows(FindWorkflowsReq) returns (FindWorkflowsResp);
 
-    rpc MakeChan(MakeChanReq) returns (Empty);
+    // Channel management
+    rpc MakeChan(Channel) returns (Empty);
 
     rpc ListChans(ListChansReq) returns (ListChansResp);
+
+    rpc GetChan(GetChanReq) returns (Channel);
 
     rpc CloseChan(CloseChanReq) returns (Empty);
 
     rpc DeleteChan(DeleteChanReq) returns (Empty);
 
 
+    // Type management
     rpc PutType(Type) returns (Empty);
+
+    rpc GetType(GetTypeReq) returns (Type);
     
     rpc ListTypes(ListTypesReq) returns (ListTypesResp);
 
     rpc DeleteType(Type) returns (Empty);
 
-
+    // API management
     rpc PutWorkflowAPI(WorkflowAPI) returns (Empty);
 
     rpc ListWorkflowAPIs(ListWorkflowAPIsReq) returns (ListWorkflowAPIsResp);    
+
+    rpc GetWorkflowAPI(GetWorkflowAPIReq) returns (WorkflowAPI);    
 
     rpc DeleteWorkflowAPI(WorkflowAPI) returns (Empty);    
 }

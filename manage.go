@@ -30,8 +30,8 @@ const None = "async.None"
 func logW(w *Workflow) *logrus.Entry {
 	return logrus.WithFields(logrus.Fields{
 		"module":     "gorchestrate-async",
-		"workflowId": w.Id,
-		"workflow":   w.Name,
+		"workflowId": w.ID,
+		"workflow":   w.API,
 		"service":    w.Service,
 		"version":    w.Version,
 	})
@@ -47,7 +47,7 @@ func handleReq(c RuntimeClient, req *LockedWorkflow, new interface{}, teardown f
 		}
 	}
 	for i, t := range req.Workflow.Threads {
-		if req.Thread.Id == t.Id {
+		if req.Thread.ID == t.ID {
 			req.Workflow.Threads = append(req.Workflow.Threads[:i], req.Workflow.Threads[i+1:]...)
 		}
 	}
@@ -72,8 +72,8 @@ func handleReq(c RuntimeClient, req *LockedWorkflow, new interface{}, teardown f
 			case <-t.C:
 				ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 				_, err := c.ExtendLock(ctx, &ExtendLockReq{
-					Id:      req.Workflow.Id,
-					Lockid:  req.LockId,
+					ID:      req.Workflow.ID,
+					LockID:  req.LockID,
 					Seconds: 30,
 				})
 				if err != nil {
@@ -114,7 +114,7 @@ func handleReq(c RuntimeClient, req *LockedWorkflow, new interface{}, teardown f
 	}
 	_, err = c.UpdateWorkflow(context.Background(), &UpdateWorkflowReq{
 		Workflow:    req.Workflow,
-		LockId:      req.LockId,
+		LockID:      req.LockID,
 		UnblockedAt: req.Thread.UnblockedAt,
 	})
 	if err != nil {
@@ -157,7 +157,7 @@ func ManageWorkflows(ctx context.Context, client RuntimeClient, s Service) error
 			if err != nil {
 				return err
 			}
-			api := apis[req.Workflow.Name]
+			api := apis[req.Workflow.API]
 			if api.Setup == nil {
 				logW(req.Workflow).Errorf("no setup code for workflow: %v", err)
 				continue

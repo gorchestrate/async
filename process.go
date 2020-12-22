@@ -29,13 +29,11 @@ func (p *W) NewID() string {
 func (p *W) MakeChan(t *Type, bufsize int) Channel {
 	id := p.NewID()
 	ch := Channel{
-		Id:         id,
-		DataType:   t.Id,
+		ID:         id,
+		DataType:   t.ID,
 		BufMaxSize: uint64(bufsize),
 	}
-	_, err := p.client.MakeChan(context.Background(), &MakeChanReq{
-		Chan: &ch,
-	})
+	_, err := p.client.MakeChan(context.Background(), &ch)
 	if err != nil {
 		panic(err)
 	}
@@ -43,17 +41,7 @@ func (p *W) MakeChan(t *Type, bufsize int) Channel {
 }
 
 func (p *W) ID() string {
-	return p.workflow.Id
-}
-
-// Name is a workflow name (not ID).
-func (p *W) Name() string {
-	return p.workflow.Name
-}
-
-// Name is a workflow name (not ID).
-func (p *W) Service() string {
-	return p.workflow.Service
+	return p.workflow.ID
 }
 
 func (p *W) resume(s interface{}) error {
@@ -71,8 +59,8 @@ func (p *W) resume(s interface{}) error {
 		case p.resumedThread.Select != nil:
 			input = p.resumedThread.Select.RecvData
 		}
-		if p.resumedThread.ToStatus != "" {
-			err := p.call(s, p.resumedThread.ToStatus, input)
+		if p.resumedThread.Callback != "" {
+			err := p.call(s, p.resumedThread.Callback, input)
 			if err != nil {
 				return err
 			}
@@ -128,7 +116,7 @@ func (p *W) Finish(result interface{}) *W {
 func (p *W) lastSel() *Select {
 	if p.newThread == nil {
 		p.newThread = &Thread{
-			Id:       p.resumedThread.Id,
+			ID:       p.resumedThread.ID,
 			Workflow: p.resumedThread.Workflow,
 			Service:  p.workflow.Service,
 			Status:   Thread_Blocked,
@@ -178,19 +166,19 @@ func (p *W) To(cb interface{}) *W { // TODO: check data type, based on Channel i
 	}
 	inputType := "async.None"
 	if method.Type().NumIn() > 1 {
-		inputType = reflect.New(method.Type().In(1)).Interface().(AsyncType).Type().Id
+		inputType = reflect.New(method.Type().In(1)).Interface().(AsyncType).Type().ID
 	}
 
 	if p.newThread.Select != nil {
 		ls := p.lastSel()
 		cs := ls.Cases[len(ls.Cases)-1]
-		cs.ToStatus = to
+		cs.Callback = to
 		if cs.Op == Case_Recv {
 			cs.DataType = inputType
 		}
 	}
 	if p.newThread.Call != nil {
-		p.newThread.ToStatus = to
+		p.newThread.Callback = to
 		p.newThread.Call.OutputType = inputType
 	}
 	return p
@@ -200,7 +188,7 @@ func (p *W) Recv(channel Channel) *W {
 	p.checkNoDefault()
 	ls := p.lastSel()
 	ls.Cases = append(ls.Cases, &Case{
-		Chan: channel.Id,
+		Chan: channel.ID,
 		Op:   Case_Recv,
 	})
 	return p
@@ -214,22 +202,22 @@ func (p *W) Send(channel Channel, data interface{}) *W {
 	}
 	ls := p.lastSel()
 	ls.Cases = append(ls.Cases, &Case{
-		Chan:     channel.Id,
+		Chan:     channel.ID,
 		Op:       Case_Send,
 		Data:     d,
-		DataType: data.(AsyncType).Type().Id,
+		DataType: data.(AsyncType).Type().ID,
 	})
 	return p
 }
 
 func (p *W) Go(id string, f func(p *W)) {
 	for _, v := range p.workflow.Threads {
-		if v.Id == id {
+		if v.ID == id {
 			panic("starting goroutine twice")
 		}
 	}
 	t := &Thread{
-		Id:       id,
+		ID:       id,
 		Workflow: p.resumedThread.Workflow,
 		Service:  p.workflow.Service,
 		Status:   Thread_Blocked,
@@ -266,17 +254,17 @@ func (p *W) Call(name string, input interface{}) *W {
 	}
 	if p.newThread == nil { // operation on same thread
 		p.newThread = &Thread{
-			Id:       p.resumedThread.Id,
+			ID:       p.resumedThread.ID,
 			Workflow: p.resumedThread.Workflow,
 			Service:  p.workflow.Service,
 			Status:   Thread_Blocked,
 		}
 	}
 	p.newThread.Call = &Call{
-		Id:        p.NewID(),
-		Name:      name,
+		ID:        p.NewID(),
+		API:       name,
 		Input:     in,
-		InputType: input.(AsyncType).Type().Id,
+		InputType: input.(AsyncType).Type().ID,
 	}
 	return p
 }

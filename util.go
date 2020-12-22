@@ -28,7 +28,7 @@ func (t *Time) UnmarshalJSON(data []byte) error {
 
 func (s *Workflow) HasThread(id string) bool {
 	for _, sel := range s.Threads {
-		if sel.Id == id {
+		if sel.ID == id {
 			return true
 		}
 	}
@@ -37,7 +37,7 @@ func (s *Workflow) HasThread(id string) bool {
 
 func (s *Workflow) SetThread(new *Thread) (created bool) {
 	for i, sel := range s.Threads {
-		if sel.Id == new.Id {
+		if sel.ID == new.ID {
 			s.Threads[i] = new
 			return false
 		}
@@ -52,7 +52,7 @@ func ReflectType(name string, t interface{}, version uint64, description string)
 		panic(err) // not expected
 	}
 	return &Type{
-		Id:          name,
+		ID:          name,
 		JsonSchema:  schema,
 		Version:     version,
 		Description: description,
