@@ -15,6 +15,7 @@ type State struct {
 	Workflow string          `db:"workflow"` // name of workflow definition. Used to choose proper state type to unmarshal & resume on
 	State    json.RawMessage `db:"state"`    // json body of workflow state
 	Status   WorkflowStatus  `db:"status"`   // current status
+	Input    json.RawMessage `db:"input"`    // json input of the workflow
 	Output   json.RawMessage `db:"output"`   // json output of the finished workflow. Valid only if Status = Finished
 
 	CurStep        string `db:"curstep"`        // current step of the workflow
@@ -113,7 +114,7 @@ func (s State) Insert(ctx context.Context, db *sqlx.DB) error {
 }
 
 func (s State) Update(ctx context.Context, tx *sqlx.Tx) error {
-	log.Printf("update: %#v", s)
+	log.Printf("update: %v status=%v curstep=%v state=%v", s.ID, s.Status, s.CurStep, string(s.State))
 	r, err := tx.ExecContext(ctx, `UPDATE states SET 
 			workflow = $2,
 			state = $3,

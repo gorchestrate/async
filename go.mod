@@ -10,6 +10,7 @@ require (
 	github.com/boltdb/bolt v1.3.1 // indirect
 	github.com/elastic/go-elasticsearch/v7 v7.10.0 // indirect
 	github.com/emersion/go-imap v1.0.6 // indirect
+	github.com/goccy/go-graphviz v0.0.9
 	github.com/golang/protobuf v1.4.3
 	github.com/gorchestrate/mail-plugin v0.0.0-20201103102343-c76682338ec8 // indirect
 	github.com/gorilla/mux v1.8.0

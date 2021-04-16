@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"reflect"
 	"time"
 )
 
@@ -18,8 +17,21 @@ type Workflow struct {
 // When process is resumed - current state is unmarshalled into it and then Workflow() is called.
 // With such technique all usages of receiver withing Workflow() function will refer to current values, so there's no need for lasy parameters i.e.  instead of 'If( func() bool { return s.IsAvailable}' we can write 'If(s.IsAvailable)'
 type WorkflowState interface {
-	Workflow() Section // Return current workflow definition. This function can be called multiple times, so be careful with doing real code execution inside.
+	Definition() WorkflowDefinition // Return current workflow definition. This function can be called multiple times, so be careful with doing real code execution inside.
 }
+
+type WorkflowDefinition struct {
+	// New is called when the workflow is created
+	// It's also used to construct the API definition for input/output
+	New Handler
+
+	// Body is the asyncronous part of the workflow
+	Body Section
+}
+
+// Handler is a generic function that is analyzed using reflection
+// It's a convenient way to specify input/output types as well as the implementation
+type Handler interface{}
 
 // ResumeContext is used during workflow execution
 // It contains resume input as well as current state of the execution.
@@ -61,9 +73,6 @@ type Stmt interface {
 	// If callback is found, but process has finished - *Stop will be nil and ctx.Running will be true
 	// Otherwise Resume should always return *Stop or err != nil
 	Resume(ctx *ResumeContext) (*Stop, error)
-
-	// Find walks the tree, searching for Stmt with approapriate CurStep and returns it
-	Find(name string) Stmt
 }
 
 func (s Section) Resume(ctx *ResumeContext) (*Stop, error) {
@@ -76,15 +85,15 @@ func (s Section) Resume(ctx *ResumeContext) (*Stop, error) {
 	return nil, nil
 }
 
-func (s Section) Find(name string) Stmt {
-	for _, stmt := range s {
-		stmt := stmt.Find(name)
-		if stmt != nil {
-			return stmt
-		}
-	}
-	return nil
-}
+// func (s Section) Find(name string) Stmt {
+// 	for _, stmt := range s {
+// 		stmt := stmt.Find(name)
+// 		if stmt != nil {
+// 			return stmt
+// 		}
+// 	}
+// 	return nil
+// }
 
 type ActionResult struct {
 	Success       bool
@@ -109,12 +118,12 @@ type StmtStep struct {
 	// Recover RecoverFunc
 }
 
-func (s StmtStep) Find(name string) Stmt {
-	if s.Name == name {
-		return s
-	}
-	return nil
-}
+// func (s StmtStep) Find(name string) Stmt {
+// 	if s.Name == name {
+// 		return s
+// 	}
+// 	return nil
+// }
 
 func (s StmtStep) Resume(ctx *ResumeContext) (*Stop, error) {
 	if ctx.Running {
@@ -140,8 +149,9 @@ func Step(name string, action ActionFunc) StmtStep {
 // }
 
 type SwitchCase struct {
-	Cond bool
-	Stmt Stmt
+	CondLabel string
+	Cond      bool
+	Stmt      Stmt
 }
 
 type SwitchStmt []SwitchCase
@@ -150,15 +160,15 @@ func Switch(ss ...SwitchCase) SwitchStmt {
 	return ss
 }
 
-func (s SwitchStmt) Find(name string) Stmt {
-	for _, v := range s {
-		stmt := v.Stmt.Find(name)
-		if stmt != nil {
-			return stmt
-		}
-	}
-	return nil
-}
+// func (s SwitchStmt) Find(name string) Stmt {
+// 	for _, v := range s {
+// 		stmt := v.Stmt.Find(name)
+// 		if stmt != nil {
+// 			return stmt
+// 		}
+// 	}
+// 	return nil
+// }
 
 func (s SwitchStmt) Resume(ctx *ResumeContext) (*Stop, error) {
 	if ctx.Running {
@@ -183,43 +193,48 @@ func (s SwitchStmt) Resume(ctx *ResumeContext) (*Stop, error) {
 	return nil, nil
 }
 
-func If(cond bool, sec Stmt) SwitchStmt {
+func If(cond bool, condLabel string, sec Stmt) SwitchStmt {
 	return SwitchStmt{
 		SwitchCase{
-			Cond: cond,
-			Stmt: sec,
+			CondLabel: condLabel,
+			Cond:      cond,
+			Stmt:      sec,
 		},
 	}
 }
-func Case(cond bool, sec Stmt) SwitchCase {
+func Case(cond bool, condLabel string, sec Stmt) SwitchCase {
 	return SwitchCase{
-		Cond: cond,
-		Stmt: sec,
+		CondLabel: condLabel,
+		Cond:      cond,
+		Stmt:      sec,
 	}
 }
 
 func Default(sec Stmt) SwitchCase {
 	return SwitchCase{
-		Cond: true,
-		Stmt: sec,
+		CondLabel: "default",
+		Cond:      true,
+		Stmt:      sec,
 	}
 }
 
 type ForStmt struct {
-	Cond bool // nil cond for infinite loop
-	Stmt Stmt
+	CondLabel string
+	Cond      bool // nil cond for infinite loop
+	Stmt      Stmt
 }
 
-func For(cond bool, sec Stmt) Stmt {
+func For(cond bool, condLabel string, sec Stmt) Stmt {
 	return ForStmt{
-		Cond: cond,
-		Stmt: sec,
+		CondLabel: condLabel,
+		Cond:      cond,
+		Stmt:      sec,
 	}
 }
 
-func (f ForStmt) Find(name string) Stmt {
-	return f.Stmt.Find(name)
-}
+// func (f ForStmt) Find(name string) Stmt {
+// 	return f.Stmt.Find(name)
+// }
 
 func (f ForStmt) Resume(ctx *ResumeContext) (*Stop, error) {
 	if !ctx.Running {
@@ -259,57 +274,6 @@ func Select(name string, ss ...WaitCond) SelectStmt {
 	}
 }
 
-func (s SelectStmt) Find(name string) Stmt {
-	for _, v := range s.Cases {
-		stmt := v.Stmt.Find(name)
-		if stmt != nil {
-			return stmt
-		}
-	}
-	return nil
-}
-
-// there are 3 options for input params
-// 1. func()
-// 2. func(in Struct)
-// 2. func(ctx Context.Context, in Struct)
-
-// and there are 3 options for output params
-// 1. func() {}
-// 2. func() error {}
-// 3. func() (Struct, error) {}
-
-func reflectCall(handler interface{}, ctx *ResumeContext) error {
-	h := reflect.ValueOf(handler)
-	ht := h.Type()
-
-	in := []reflect.Value{}
-	if ht.NumIn() == 1 {
-		v := reflect.New(ht.In(0)).Interface()
-		err := json.Unmarshal(ctx.CallbackInput, v)
-		if err != nil {
-			return err
-		}
-		in = []reflect.Value{reflect.ValueOf(v).Elem()}
-	}
-	res := h.Call(in)
-	if len(res) == 1 {
-		return res[0].Interface().(error)
-	}
-	if len(res) == 2 {
-		d, err := json.Marshal(res[0].Interface())
-		if err != nil {
-			return fmt.Errorf("err mashaling callback output: %v", err)
-		}
-		ctx.CallbackOutput = d
-		if res[1].Interface() == nil {
-			return nil
-		}
-		return res[1].Interface().(error)
-	}
-	return nil
-}
-
 func (s SelectStmt) Resume(ctx *ResumeContext) (*Stop, error) {
 	if ctx.Running {
 		return &Stop{Select: &s}, nil
@@ -346,7 +310,7 @@ func (s SelectStmt) Resume(ctx *ResumeContext) (*Stop, error) {
 type WaitCond struct {
 	CaseAfter time.Duration // wait for time
 	CaseEvent string        // wait for event
-	Handler   interface{}
+	Handler   Handler
 
 	Stmt Stmt
 }
@@ -360,10 +324,59 @@ func After(d time.Duration, sec Stmt) WaitCond {
 }
 
 // On waits for event to come and then resumes the workflow. If multiple conditions are specified - only one that is fired first will fire.
-func On(event string, handler interface{}, sec Stmt) WaitCond {
+func On(event string, handler Handler, sec Stmt) WaitCond {
 	return WaitCond{
 		CaseEvent: event,
 		Stmt:      sec,
 		Handler:   handler,
 	}
+}
+
+// After waits for specified time and then resumes the workflow. If multiple conditions are specified - only one that is fired first will fire.
+func WaitFor(name string, d time.Duration, sec ...Stmt) SelectStmt {
+	return SelectStmt{
+		Name: "waitfor-" + name,
+		Cases: []WaitCond{{
+			CaseAfter: d,
+			Stmt:      Section(sec),
+		}},
+	}
+}
+
+// On waits for event to come and then resumes the workflow. If multiple conditions are specified - only one that is fired first will fire.
+func WaitEvent(event string, handler Handler, sec ...Stmt) SelectStmt {
+	return SelectStmt{
+		Name: "select-" + event,
+		Cases: []WaitCond{
+			{
+				CaseEvent: event,
+				Stmt:      Section(sec),
+				Handler:   handler,
+			},
+		},
+	}
+}
+
+type BreakStmt struct {
+}
+
+func (s BreakStmt) Resume(ctx *ResumeContext) (*Stop, error) {
+	//TODO:
+	return nil, nil
+}
+
+func Break() BreakStmt {
+	return BreakStmt{}
+}
+
+type ReturnStmt struct {
+}
+
+func (s ReturnStmt) Resume(ctx *ResumeContext) (*Stop, error) {
+	//TODO:
+	return nil, nil
+}
+
+func Return() ReturnStmt {
+	return ReturnStmt{}
 }

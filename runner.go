@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"log"
+	"net/http"
 	"sync"
 	"time"
 
+	"github.com/gorilla/mux"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -26,7 +29,10 @@ func (r *Runner) ResumeState(s *State, rCtx *ResumeContext) error {
 	if err != nil {
 		return fmt.Errorf("state unmarshal err: %v", err)
 	}
-	stop, err := state.Workflow().Resume(rCtx)
+	if rCtx.CurStep == "" { // workflow has just started
+		rCtx.Running = true
+	}
+	stop, err := state.Definition().Body.Resume(rCtx)
 	if err != nil {
 		return fmt.Errorf("err during workflow execution: %v", err)
 	}
@@ -86,7 +92,10 @@ func (r *Runner) ExecStep(s *State) error {
 	if s.Status != "Executing" { // TODO: handle more exec step statuses
 		return fmt.Errorf("unexpected status for state: %v", s.Status)
 	}
-	step := state.Workflow().Find(s.CurStep).(StmtStep)
+	step, ok := FindStep(s.CurStep, state.Definition().Body).(StmtStep)
+	if !ok {
+		return fmt.Errorf("can't find step %v", s.CurStep)
+	}
 	res := step.Action()
 	if res.Success {
 		s.Status = "Resuming"
@@ -198,6 +207,47 @@ func (r *Runner) ResumeAfterStepsExecuted(ctx context.Context) error {
 		}
 	}
 	return tx.Commit()
+}
+
+func (r *Runner) NewWorkflow(ctx context.Context, id, name string, state interface{}) error {
+	d, err := json.Marshal(state)
+	if err != nil {
+		return err
+	}
+	s := State{
+		ID:         id,
+		Workflow:   name,
+		State:      json.RawMessage(d),
+		WaitEvents: []string{},
+		CurStep:    "",
+		Status:     "Resuming",
+		Output:     json.RawMessage(`{}`),
+	}
+	return s.Insert(ctx, r.db)
+}
+
+// TODO: new workflow!?
+func (r *Runner) Router() *mux.Router {
+	mr := mux.NewRouter()
+	mr.HandleFunc("/state/{id}/callback/{callback}", func(w http.ResponseWriter, req *http.Request) {
+		d, err := ioutil.ReadAll(req.Body)
+		if err != nil {
+			w.WriteHeader(400)
+			fmt.Fprintf(w, "body read err: %v", err)
+			return
+		}
+		out, err := r.Handler(req.Context(), mux.Vars(req)["id"], "/"+mux.Vars(req)["callback"], d)
+		if err != nil {
+			w.WriteHeader(400)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"error":  err.Error(),
+				"output": out,
+			})
+			return
+		}
+		w.Write(out)
+	})
+	return mr
 }
 
 func (r *Runner) Handler(ctx context.Context, id, callback string, data json.RawMessage) (json.RawMessage, error) {
