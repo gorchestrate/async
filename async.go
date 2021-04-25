@@ -43,8 +43,7 @@ type ResumeContext struct {
 	CallbackOutput json.RawMessage // In case we are resuming a Select with a callback event - this is the data to marshall back to client in case workflow was successfully saved.
 	Break          bool            // Used for loop management
 
-	//CurThread     string  // TODO: Goroutines inside process
-	//T       *Thread       // TODO: Goroutines inside process
+	ThreadToResume string // Name of thread we are resuming on
 }
 
 // Stop tells us that syncronous part of the workflow has finished. It means we either:
@@ -310,7 +309,11 @@ func (s SelectStmt) Resume(ctx *ResumeContext) (*Stop, error) {
 type WaitCond struct {
 	CaseAfter time.Duration // wait for time
 	CaseEvent string        // wait for event
-	Handler   Handler
+	CaseRecv  string        // wait for receive channel
+	CaseSend  string        // wait for send channels
+	SendData  json.RawMessage
+
+	Handler Handler
 
 	Stmt Stmt
 }
@@ -379,4 +382,14 @@ func (s ReturnStmt) Resume(ctx *ResumeContext) (*Stop, error) {
 
 func Return() ReturnStmt {
 	return ReturnStmt{}
+}
+
+type GoStmt struct {
+	Name string // name of goroutine
+	Stmt Stmt
+}
+
+func (s GoStmt) Resume(ctx *ResumeContext) (*Stop, error) {
+	//TODO:
+	return nil, nil
 }

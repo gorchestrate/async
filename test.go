@@ -3,14 +3,18 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/goccy/go-graphviz"
 	"github.com/goccy/go-graphviz/cgraph"
+	"github.com/gorilla/mux"
 )
 
 var g = graphviz.New()
@@ -25,7 +29,7 @@ func newNodeWithID(graph *cgraph.Graph, id, stmt, name string) *cgraph.Node {
 	n.SetShape(cgraph.BoxShape)
 	switch stmt {
 	case "Handler":
-		n.SetShape(cgraph.RArrowShape)
+		n.SetShape(cgraph.Shape("record"))
 	case "Task":
 		n.SetShape(cgraph.BoxShape)
 	case "Wait":
@@ -60,32 +64,43 @@ func makeEdges(graph *cgraph.Graph, src []*cgraph.Node, dst *cgraph.Node, name s
 	}
 }
 
+func jsonString(w interface{}) string {
+	d, _ := json.MarshalIndent(w, "", " ")
+	return string(d)
+}
 func GWalk(graph *cgraph.Graph, pp []*cgraph.Node, s Stmt, ename string) ([]*cgraph.Node, string) {
 	log.Print("GWALK: ", reflect.TypeOf(s))
 	switch x := s.(type) {
 	case nil:
-		return nil, ""
+		return pp, ""
 	case ReturnStmt:
-		log.Print("RETURN")
 		n := newNode(graph, "END", "END")
 		makeEdges(graph, pp, n, ename)
 		return nil, ""
 	case StmtStep:
-		log.Print("STEP")
 		n := newNode(graph, "Step", x.Name)
 		makeEdges(graph, pp, n, ename)
 		return []*cgraph.Node{n}, ""
 	case SelectStmt:
-		log.Print("SELECT")
 		n := newNode(graph, "Wait", "Wait")
 		makeEdges(graph, pp, n, ename)
 		ret := []*cgraph.Node{}
 		for _, v := range x.Cases {
-			name := "POST " + v.CaseEvent + "  "
+			name := "{<f0> POST " + v.CaseEvent +
+				"|<f1>" + strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(jsonString(ReflectDoc(v.Handler, true).Input), "{", "\\{"), "}", "\\}"), "\n", "\\n") +
+				"|<f2> Output: " + strings.TrimPrefix(ReflectDoc(v.Handler, true).Output.Ref, "#/definitions/") +
+				"  }"
 			if v.CaseEvent == "" {
 				name = fmt.Sprintf("after %.0f secs", v.CaseAfter.Seconds())
 			}
 			wn := newNode(graph, "Handler", name)
+			// if v.CaseEvent != "" {
+			// 	nIn := newNode(graph, "Doc", "Input")
+			// 	nOut := newNode(graph, "Doc", "Output")
+			// 	makeEdges(graph, []*cgraph.Node{nIn}, wn, "")
+			// 	makeEdges(graph, []*cgraph.Node{wn}, nOut, "")
+			// }
+
 			graph.CreateEdge("", n, wn)
 			localPP, _ := GWalk(graph, []*cgraph.Node{wn}, v.Stmt, "")
 			ret = append(ret, localPP...)
@@ -121,7 +136,116 @@ func GWalk(graph *cgraph.Graph, pp []*cgraph.Node, s Stmt, ename string) ([]*cgr
 	return pp, ename
 }
 
-func GraphVizDot(w Workflow) string {
+func jsonErr(w http.ResponseWriter, err error, code int) {
+	w.WriteHeader(code)
+	json.NewEncoder(w).Encode(struct {
+		Code    string
+		Message string
+	}{
+		Code:    "GeneralError",
+		Message: err.Error(),
+	})
+}
+
+func GraphVizHandler(ww map[string]Workflow) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		wf, ok := ww[mux.Vars(r)["name"]]
+		if !ok {
+			jsonErr(w, fmt.Errorf("workflow not found"), 404)
+			return
+		}
+		err := renderGraphvizSVG(wf, w)
+		if err != nil {
+			jsonErr(w, fmt.Errorf("render err: %v", err), 500)
+			return
+		}
+	}
+}
+
+func SwaggerHandler(ww map[string]Workflow) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		paths := map[string]interface{}{}
+		defs := map[string]interface{}{
+			"Error": map[string]interface{}{
+				"properties": map[string]interface{}{
+					"code": map[string]string{
+						"type": "string",
+					},
+					"message": map[string]string{
+						"type": "string",
+					},
+				},
+			},
+		}
+		for _, w := range ww {
+			wdoc := Docs(w.InitState().Definition())
+			for handler, schema := range wdoc.Handlers {
+				for k, def := range schema.Input.Definitions {
+					defs[k] = cleanVersion(def)
+					log.Printf("add definition: %v", k)
+				}
+				for k, def := range schema.Output.Definitions {
+					defs[k] = cleanVersion(def)
+					log.Printf("add definition: %v", k)
+				}
+				paths[fmt.Sprintf("/%v/{id}%v", w.Name, handler)] = map[string]interface{}{
+					"post": map[string]interface{}{
+						"consumes": []string{"application/json"},
+						"produces": []string{"application/json"},
+						"parameters": []interface{}{
+							map[string]interface{}{
+								"in":   "body",
+								"name": fmt.Sprintf("%v", w.Name),
+								"schema": map[string]string{
+									"$ref": schema.Input.Ref,
+								},
+							},
+							map[string]interface{}{
+								"required": true,
+								"in":       "path",
+								"name":     "id",
+								"type":     "string",
+							},
+						},
+						"responses": map[string]interface{}{
+							"200": map[string]interface{}{
+								"description": "OK",
+								"schema": map[string]string{
+									"$ref": schema.Output.Ref,
+								},
+							},
+							"400": map[string]interface{}{
+								"description": "Error",
+								"schema": map[string]string{
+									"$ref": "#/definitions/Error",
+								},
+							},
+						},
+					},
+				}
+
+			}
+		}
+
+		res := map[string]interface{}{
+			"swagger": "2.0",
+			"info": map[string]interface{}{
+				"title":   "SampleAPI",
+				"version": "1.0.0",
+			},
+			"host":        "api.example.com",
+			"basePath":    "/workflows",
+			"schemes":     []string{"https"},
+			"paths":       paths,
+			"definitions": defs,
+		}
+		e := json.NewEncoder(w)
+		e.SetIndent("", " ")
+		e.Encode(res)
+	}
+}
+
+func renderGraphvizSVG(w Workflow, out io.Writer) error {
 	graph, err := g.Graph()
 	if err != nil {
 		log.Fatal(err)
@@ -131,40 +255,29 @@ func GraphVizDot(w Workflow) string {
 	end := newNode(graph, "END", "END")
 	makeEdges(graph, nn, end, ename)
 	var buf bytes.Buffer
-	if err := g.Render(graph, graphviz.PNG, &buf); err != nil {
+	if err := g.Render(graph, graphviz.SVG, &buf); err != nil {
 		log.Fatal(err)
 	}
-	graph.SetRankSeparator(0)
+	graph.SetRankSeparator(0.4)
 
-	// 3. write to file directly
-	if err := g.RenderFilename(graph, graphviz.PNG, "graph.png"); err != nil {
-		log.Fatal(err)
-	}
-	return ""
+	return g.Render(graph, graphviz.SVG, out)
 }
 
 func main() {
-	GraphVizDot(Workflow{
-		Name: "transaction",
-		InitState: func() WorkflowState {
-			return &TransactionFlow{}
-		},
-	})
-	panic("WTF")
-	d, err := Swagger(map[string]Workflow{
-		"transaction": {
-			Name: "transaction",
+	ww := map[string]Workflow{
+		"order": {
+			Name: "order",
 			InitState: func() WorkflowState {
-				return &TransactionFlow{}
+				return &PizzaOrderWorkflow{}
 			},
 		},
-	})
-	if err != nil {
-		panic(err)
 	}
-	log.Print(string(d))
-	return
-	runner, err := NewRunner(context.Background(), "postgres://user:pass@localhost/async?sslmode=disable", []Workflow{})
+	// r := mux.NewRouter()
+	// r.HandleFunc("/diagram/{name}", GraphVizHandler(ww))
+	// r.HandleFunc("/swagger", SwaggerHandler(ww))
+	// http.ListenAndServe(":8080", r)
+	// log.Printf("START")
+	runner, err := NewRunner(context.Background(), "postgres://user:pass@localhost/async?sslmode=disable", ww)
 	if err != nil {
 		panic(err)
 	}
@@ -172,10 +285,10 @@ func main() {
 		log.Fatal(http.ListenAndServe(":8081", runner.Router()))
 	}()
 
-	err = runner.NewWorkflow(context.Background(), "1", "TransactionFlow", TransactionFlow{})
+	err = runner.NewWorkflow(context.Background(), "1", "PizzaOrderWorkflow", PizzaOrderWorkflow{})
 	// s := State{
 	// 	ID:         "1",
-	// 	Workflow:   "TransactionFlow",
+	// 	Workflow:   "PizzaOrderWorkflow",
 	// 	State:      json.RawMessage(`{}`),
 	// 	WaitEvents: []string{},
 	// 	CurStep:    "init",
@@ -193,93 +306,103 @@ func main() {
 	}
 }
 
-type TransactionFlow struct {
+type PizzaOrderWorkflow struct {
+	ID          string
+	OrderNumber string
 	Created     time.Time
 	Status      string
-	PaymentInfo PaymentInfo
-	DstAccount  AccountInfo
-	Amount      int
+	Request     PizzaOrderRequest
 }
 
-type AccountInfo struct {
-	Token      string
-	ExpMonth   int
-	ExpYear    int
-	NameOnCard string
+type Pizza struct {
+	ID    string
+	Name  string
+	Sause string
+	Qty   int
+}
+type PizzaOrderResponse struct {
+	OrderNumber string
 }
 
-type PaymentInfo struct {
-	BankAccount string
+type PizzaOrderRequest struct {
+	User      string
+	OrderTime time.Time
+	Pizzas    []Pizza
 }
 
-type TransactionInput struct {
-	PaymentInfo PaymentInfo
-	Amount      int
+func RefundCustomer(reason string) Stmt {
+	return S(
+		Step("call manager - "+reason, func() ActionResult {
+			log.Printf("call manager")
+			return ActionResult{Success: true}
+		}),
+		Step("refund customer - "+reason, func() ActionResult {
+			log.Printf("refund customer")
+			return ActionResult{Success: true}
+		}),
+		Return(),
+	)
 }
 
-func (e *TransactionFlow) Definition() WorkflowDefinition {
+func (e *PizzaOrderWorkflow) Definition() WorkflowDefinition {
 	return WorkflowDefinition{
-		New: func(input TransactionInput) (*TransactionFlow, error) {
-			log.Printf("transaction created")
-			if e.Amount < 0 {
-				return nil, fmt.Errorf("zmount less than 0")
+		New: func(req PizzaOrderRequest) (*PizzaOrderResponse, error) {
+			log.Printf("got pizza order")
+			if len(req.Pizzas) == 0 {
+				return nil, fmt.Errorf("0 pizzas supplied")
 			}
-			e.Amount = input.Amount
-			e.PaymentInfo = input.PaymentInfo
-			e.Status = "Created"
-			return e, nil
+			counter++
+			e.OrderNumber = fmt.Sprint(counter)
+			e.Request = req
+			return &PizzaOrderResponse{OrderNumber: e.OrderNumber}, nil
 		},
 		Body: S(
-			// Step is an asyncronous task that is automatically retried on failure.
-			Step("start", func() ActionResult {
-				log.Print("sending request")
+			Select("waiting in queue",
+				After(time.Minute*5, S(
+					Step("order timed out", func() ActionResult {
+						e.Status = "NotTaken"
+						return ActionResult{Success: true}
+					}),
+					Step("notify restaraunt manager", func() ActionResult {
+						return ActionResult{Success: true}
+					}),
+					Step("notify client", func() ActionResult {
+						return ActionResult{Success: true}
+					}),
+					Select("solve prolem",
+						After(time.Hour*24, S(Step("NotTakenOrder timed out", func() ActionResult {
+							log.Printf("order was not taken and manager did not made any action")
+							return ActionResult{Success: true}
+						}), Return())),
+						On("/confirmTimedOutOrder", nil, nil),
+						On("/failOrder", nil, S(Step("failOrder", func() ActionResult {
+							log.Printf("order failed")
+							return ActionResult{Success: true}
+						}), Return())),
+					),
+				)),
+				On("/confirmOrder", nil, nil),
+			),
+			Step("Move To Kitchen", func() ActionResult {
+				e.Status = "InKitchen"
 				return ActionResult{Success: true}
 			}),
-			For(e.Status == "Ready", "trans ready", S(
-				Step("s1", func() ActionResult {
-					log.Print("sending request")
-					return ActionResult{Success: true}
-				}),
-				Step("s2", func() ActionResult {
-					log.Print("sending request")
-					return ActionResult{Success: true}
-				}),
-			)),
-			WaitEvent("/capture", func(string) string {
-				e.Status = "Captured"
-				return "OK"
+			Select("wait for cook to take pizza",
+				After(time.Minute*30, RefundCustomer("pizza not taken")),
+				On("/startPreparing", func() {
+					e.Status = "Cooking"
+				}, nil),
+			),
+			Select("wait for pizza to be prepared",
+				After(time.Minute*30, RefundCustomer("pizza not prepared")),
+				On("/startPreparing", func() {
+					e.Status = "Prepared"
+				}, nil),
+			),
+			Step("wait to delivery", func() ActionResult {
+				log.Printf("add to delivery queue")
+				return ActionResult{Success: true}
 			}),
-			Select("grace period",
-				On("/cancel", func(string) string {
-					e.Status = "Canceled"
-					return "OK"
-				}, Return()),
-				After(time.Hour, Step("captureTransaction", func() ActionResult {
-					log.Print("Capture transaction")
-					return ActionResult{Success: true}
-				})),
-			),
-			WaitFor("ready to process", time.Minute*5),
-			For(e.Status == "Captured", "Trans in Captured State",
-				Select("waiting for trans status",
-					After(time.Hour, Step("poll transaction status",
-						func() ActionResult {
-							log.Print("poll transaciton")
-							e.Status = "Rejected" // e.Status == "Completed"
-							return ActionResult{Success: true}
-						}),
-					),
-					On("/refund", func(amount int) string {
-						e.Amount = e.Amount - amount
-						e.Status = "refunded"
-						return "OK"
-					}, Return()),
-				),
-			),
-			If(e.Status == "Rejected", "Trans Rejected", WaitEvent("/forceDeposit", func(string) string {
-				e.Status = "ForceDeposited"
-				return "OK"
-			}, Return())),
 		),
 	}
 }

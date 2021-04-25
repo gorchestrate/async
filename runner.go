@@ -288,7 +288,7 @@ func (r *Runner) Handler(ctx context.Context, id, callback string, data json.Raw
 	return rCtx.CallbackOutput, tx.Commit()
 }
 
-func NewRunner(ctx context.Context, connStr string, ww []Workflow) (*Runner, error) {
+func NewRunner(ctx context.Context, connStr string, ww map[string]Workflow) (*Runner, error) {
 	db, err := sqlx.Connect("postgres", connStr)
 	if err != nil {
 		return nil, fmt.Errorf("error opening db: %v", err)

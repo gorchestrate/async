@@ -1,6 +1,6 @@
 module wtf
 
-go 1.13
+go 1.16
 
 require (
 	github.com/DusanKasan/parsemail v1.2.0 // indirect
@@ -15,6 +15,7 @@ require (
 	github.com/gorchestrate/mail-plugin v0.0.0-20201103102343-c76682338ec8 // indirect
 	github.com/gorilla/mux v1.8.0
 	github.com/jmoiron/sqlx v1.3.1
+	github.com/kr/pretty v0.1.0 // indirect
 	github.com/lib/pq v1.3.0
 	github.com/olivere/elastic/v7 v7.0.22 // indirect
 	github.com/qri-io/jsonschema v0.2.0 // indirect

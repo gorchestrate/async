@@ -29,6 +29,8 @@ type CBHandler struct {
 
 // following function signature is allowed for exceptional use-cases, but discouraged to be used
 // CBHandler
+type Empty struct {
+}
 
 func isContext(t reflect.Type) bool {
 	return t.Implements(reflect.TypeOf((*context.Context)(nil)).Elem())
@@ -36,19 +38,21 @@ func isContext(t reflect.Type) bool {
 func isError(t reflect.Type) bool {
 	return t.Implements(reflect.TypeOf((*error)(nil)).Elem())
 }
-func ReflectDoc(handler Handler) HandlerDocs {
+func ReflectDoc(handler Handler, inline bool) HandlerDocs {
 	r := jsonschema.Reflector{
 		FullyQualifyTypeNames:     true,
 		AllowAdditionalProperties: true,
+		DoNotReference:            inline,
 	}
-	// check if this is a custom handler
-	custom, ok := handler.(CBHandler)
-	if ok {
-		return custom.Docs
+	docs := HandlerDocs{
+		Input:  r.Reflect(Empty{}),
+		Output: r.Reflect(Empty{}),
+	}
+	if handler == nil {
+		return docs
 	}
 	h := reflect.ValueOf(handler)
 	ht := h.Type()
-	docs := HandlerDocs{}
 	switch {
 	case ht.NumIn() == 0:
 	case ht.NumIn() == 1 && isContext(ht.In(0)):

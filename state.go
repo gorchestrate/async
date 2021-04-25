@@ -56,6 +56,7 @@ func (s State) EventIndex(name string) int {
 
 var schema = `
 DROP TABLE IF EXISTS states;
+DROP TABLE IF EXISTS threads;
 
 CREATE TABLE IF NOT EXISTS states (
 	id text UNIQUE PRIMARY KEY,
@@ -70,7 +71,24 @@ CREATE TABLE IF NOT EXISTS states (
 
 	waittill bigint,
 	waitevents text [] NOT NULL
- );`
+ );
+ 
+ CREATE TABLE IF NOT EXISTS threads (
+	workflowid text REFERENCES states(id),
+	id text,
+	status text NOT NULL,
+
+	curstep text NOT NULL,
+	curstepretries int NOT NULL,
+	cursteperror text NOT NULL,
+
+	waittill bigint,
+	waitevents text [] NOT NULL,
+	recvChannels text [] NOT NULL,
+	sendChannels text [] NOT NULL,
+    PRIMARY KEY(workflowid, id)
+ );
+ `
 
 func (s State) Insert(ctx context.Context, db *sqlx.DB) error {
 	_, err := db.ExecContext(ctx, `INSERT INTO states(
