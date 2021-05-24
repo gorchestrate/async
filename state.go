@@ -2,13 +2,27 @@ package main
 
 import (
 	"context"
+	"database/sql/driver"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"log"
 
 	"github.com/jmoiron/sqlx"
 	"github.com/lib/pq"
 )
+
+type Thread struct {
+	ID             string         `db:"id"`
+	Name           string         `db:"name"`
+	Status         ThreadStatus   `db:"status"`         // current status
+	CurStep        string         `db:"curstep"`        // current step of the workflow
+	CurStepRetries int            `db:"curstepretries"` // TODO
+	CurStepError   string         `db:"cursteperror"`   // TODO
+	WaitEvents     pq.StringArray `db:"waitevents"`     // events workflow is waiting for. Valid only if Status = Waiting, otherwise should be empty.
+	WaitTill       int64          `db:"waittill"`
+	Receive        []*ReceiveOp   `db:"recv"`
+	Send           []*SendOp      `db:"send"`
+}
 
 type State struct {
 	ID       string          `db:"id"`       // id of workflow instance
@@ -17,23 +31,50 @@ type State struct {
 	Status   WorkflowStatus  `db:"status"`   // current status
 	Input    json.RawMessage `db:"input"`    // json input of the workflow
 	Output   json.RawMessage `db:"output"`   // json output of the finished workflow. Valid only if Status = Finished
+	WaitTill int64           `db:"waittill"`
 
-	CurStep        string `db:"curstep"`        // current step of the workflow
-	CurStepRetries int    `db:"curstepretries"` // TODO
-	CurStepError   string `db:"cursteperror"`   // TODO
+	Threads Threads `db:"threads"`
+}
 
-	WaitEvents pq.StringArray `db:"waitevents"` // events workflow is waiting for. Valid only if Status = Waiting, otherwise should be empty.
-	WaitTill   int64          `db:"waittill"`   // unix time process is waiting for.   For Executing step - this is next retry time. For After() event - this is time we unblock if no other event came.
+type Threads []*Thread
+
+func (tt Threads) Value() (driver.Value, error) {
+	return driver.Value(string(jsonbarr(tt))), nil
+}
+
+func (tt *Threads) Scan(src interface{}) error {
+	var source []byte
+	switch src.(type) {
+	case string:
+		source = []byte(src.(string))
+	case []byte:
+		source = src.([]byte)
+	default:
+		return errors.New("Incompatible type for GzippedText")
+	}
+	return json.Unmarshal(source, tt)
+}
+
+type ReceiveOp struct {
+}
+type SendOp struct {
 }
 
 type WorkflowStatus string
+type ThreadStatus string
 
 const (
-	Executing WorkflowStatus = "Executing"
-	Resuming  WorkflowStatus = "Resuming"
-	Waiting   WorkflowStatus = "Waiting"
-	Finished  WorkflowStatus = "Finished"
-	Paused    WorkflowStatus = "Paused"
+	WorkflowRunning  WorkflowStatus = "Running"
+	WorkflowFinished WorkflowStatus = "Finished"
+	WorkflowPaused   WorkflowStatus = "Paused"
+)
+
+const (
+	ThreadExecuting ThreadStatus = "Executing"
+	ThreadResuming  ThreadStatus = "Resuming"
+	ThreadWaiting   ThreadStatus = "Waiting"
+	ThreadFinished  ThreadStatus = "Finished"
+	ThreadPaused    ThreadStatus = "Paused"
 )
 
 func (s *State) DumpState(v interface{}) error {
@@ -45,8 +86,19 @@ func (s *State) DumpState(v interface{}) error {
 	return nil
 }
 
-func (s State) EventIndex(name string) int {
-	for i, e := range s.WaitEvents {
+func jsonbarr(v interface{}) []byte {
+	if v == nil {
+		return []byte("[]")
+	}
+	d, err := json.Marshal(v)
+	if err != nil {
+		panic(err)
+	}
+	return d
+}
+
+func (t Thread) EventIndex(name string) int {
+	for i, e := range t.WaitEvents {
 		if e == name {
 			return i
 		}
@@ -56,7 +108,6 @@ func (s State) EventIndex(name string) int {
 
 var schema = `
 DROP TABLE IF EXISTS states;
-DROP TABLE IF EXISTS threads;
 
 CREATE TABLE IF NOT EXISTS states (
 	id text UNIQUE PRIMARY KEY,
@@ -64,29 +115,8 @@ CREATE TABLE IF NOT EXISTS states (
 	state JSON  NOT NULL,
 	status text NOT NULL,
 	output JSON NOT NULL,
-
-	curstep text NOT NULL,
-	curstepretries int NOT NULL,
-	cursteperror text NOT NULL,
-
-	waittill bigint,
-	waitevents text [] NOT NULL
- );
- 
- CREATE TABLE IF NOT EXISTS threads (
-	workflowid text REFERENCES states(id),
-	id text,
-	status text NOT NULL,
-
-	curstep text NOT NULL,
-	curstepretries int NOT NULL,
-	cursteperror text NOT NULL,
-
-	waittill bigint,
-	waitevents text [] NOT NULL,
-	recvChannels text [] NOT NULL,
-	sendChannels text [] NOT NULL,
-    PRIMARY KEY(workflowid, id)
+	threads JSONB NOT NULL,
+	waittill bigint NOT NULL
  );
  `
 
@@ -95,35 +125,26 @@ func (s State) Insert(ctx context.Context, db *sqlx.DB) error {
 			id,
 			workflow,
 			state, 
-			curstep, 
-			waittill, 
-			waitevents,
-			curstepretries, 
-			cursteperror,
 			status,
-			output
-		) VALUES(
+			output,
+			threads,
+			waittill
+		)VALUES(
 			$1,
 			$2,
 			$3,
 			$4,
 			$5,
 			$6,
-			$7,
-			$8,
-			$9,
-			$10
+			$7
 		);`,
 		s.ID,
 		s.Workflow,
 		s.State,
-		s.CurStep,
-		s.WaitTill,
-		s.WaitEvents,
-		s.CurStepRetries,
-		s.CurStepError,
 		s.Status,
 		s.Output,
+		s.Threads,
+		s.WaitTill,
 	)
 	if err != nil {
 		return fmt.Errorf("err during state insert: %v", err)
@@ -132,30 +153,23 @@ func (s State) Insert(ctx context.Context, db *sqlx.DB) error {
 }
 
 func (s State) Update(ctx context.Context, tx *sqlx.Tx) error {
-	log.Printf("update: %v status=%v curstep=%v state=%v", s.ID, s.Status, s.CurStep, string(s.State))
 	r, err := tx.ExecContext(ctx, `UPDATE states SET 
 			workflow = $2,
 			state = $3,
-			curstep = $4,
-			waittill = $5,
-			waitevents = $6,
-			curstepretries = $7,
-			cursteperror = $8,
-			status = $9,
-			output = $10
+			status = $4,
+			output = $5,
+			threads = $6,
+			waittill = $7
 		WHERE
 			id = $1
 		`,
 		s.ID,
 		s.Workflow,
 		s.State,
-		s.CurStep,
-		s.WaitTill,
-		s.WaitEvents,
-		s.CurStepRetries,
-		s.CurStepError,
 		s.Status,
 		s.Output,
+		s.Threads,
+		s.WaitTill,
 	)
 	if err != nil {
 		return fmt.Errorf("err during state update: %v", err)

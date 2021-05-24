@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"time"
 )
 
@@ -36,14 +35,17 @@ type Handler interface{}
 // ResumeContext is used during workflow execution
 // It contains resume input as well as current state of the execution.
 type ResumeContext struct {
+	s *State
+	t *Thread
+
+	newThreads map[string]*Thread
+
 	Running        bool            // Running means process is already resumed and we are executing statements. If process is not running - we are searching for the step we should resume from.
 	CurStep        string          // CurStep of the workflow we are resuming from.
 	CallbackIndex  int             // In case we are resuming a Select - this is and index of the select case to resume
 	CallbackInput  json.RawMessage // In case we are resuming a Select with a callback event - this is the data to unmarshall into callback function parameters via reflect.
 	CallbackOutput json.RawMessage // In case we are resuming a Select with a callback event - this is the data to marshall back to client in case workflow was successfully saved.
 	Break          bool            // Used for loop management
-
-	ThreadToResume string // Name of thread we are resuming on
 }
 
 // Stop tells us that syncronous part of the workflow has finished. It means we either:
@@ -52,7 +54,7 @@ type Stop struct {
 	Select *SelectStmt // waiting for event
 	Return interface{} // returning from process
 
-	//SubWorkflow string   // TODO: SubWorkflow support
+	//SubWorkflow string   // TODO: SubWorkflow support. Subworkflow is just a prefix to all statuses
 }
 
 // Section is similar to code block {} with a list of statements.
@@ -74,6 +76,7 @@ type Stmt interface {
 	Resume(ctx *ResumeContext) (*Stop, error)
 }
 
+// for block of code - simply try to resume/exec all stmts until we get blocked somewhere
 func (s Section) Resume(ctx *ResumeContext) (*Stop, error) {
 	for _, stmt := range s {
 		b, err := stmt.Resume(ctx)
@@ -84,16 +87,6 @@ func (s Section) Resume(ctx *ResumeContext) (*Stop, error) {
 	return nil, nil
 }
 
-// func (s Section) Find(name string) Stmt {
-// 	for _, stmt := range s {
-// 		stmt := stmt.Find(name)
-// 		if stmt != nil {
-// 			return stmt
-// 		}
-// 	}
-// 	return nil
-// }
-
 type ActionResult struct {
 	Success       bool
 	Error         string
@@ -101,37 +94,27 @@ type ActionResult struct {
 	RetryInterval time.Duration
 }
 
-// type RecoverResult struct {
-// 	Success bool
-// 	Error   string
-// 	Retry   int
-// }
-
 type ActionFunc func() ActionResult
-
-// type RecoverFunc func() RecoverResult
 
 type StmtStep struct {
 	Name   string
 	Action ActionFunc
-	// Recover RecoverFunc
 }
 
-// func (s StmtStep) Find(name string) Stmt {
-// 	if s.Name == name {
-// 		return s
-// 	}
-// 	return nil
-// }
-
 func (s StmtStep) Resume(ctx *ResumeContext) (*Stop, error) {
+	// resuming Step consists of 3 parts:
+	// 1. During execution we get blocked on Stmt and return
 	if ctx.Running {
 		return &Stop{Step: s.Name}, nil
 	}
 
+	// 2. Separate routine will pickup blocked steps and execute them
+
+	// 3. We resume from this step and continue
 	if ctx.CurStep == s.Name {
 		ctx.Running = true
 	}
+
 	return nil, nil
 }
 
@@ -141,11 +124,6 @@ func Step(name string, action ActionFunc) StmtStep {
 		Action: action,
 	}
 }
-
-// func (s StmtStep) WithRecovery(recover RecoverFunc) StmtStep {
-// 	s.Recover = recover
-// 	return s
-// }
 
 type SwitchCase struct {
 	CondLabel string
@@ -159,17 +137,9 @@ func Switch(ss ...SwitchCase) SwitchStmt {
 	return ss
 }
 
-// func (s SwitchStmt) Find(name string) Stmt {
-// 	for _, v := range s {
-// 		stmt := v.Stmt.Find(name)
-// 		if stmt != nil {
-// 			return stmt
-// 		}
-// 	}
-// 	return nil
-// }
-
 func (s SwitchStmt) Resume(ctx *ResumeContext) (*Stop, error) {
+	// if running - conditions are already evaluated - let's just loop through them
+	// and see which are true
 	if ctx.Running {
 		for _, v := range s {
 			if v.Cond {
@@ -182,6 +152,8 @@ func (s SwitchStmt) Resume(ctx *ResumeContext) (*Stop, error) {
 		}
 		return nil, nil
 	}
+
+	// if not running - try to resume everything
 	for _, v := range s {
 		b, err := v.Stmt.Resume(ctx)
 		if err != nil || b != nil {
@@ -201,6 +173,7 @@ func If(cond bool, condLabel string, sec Stmt) SwitchStmt {
 		},
 	}
 }
+
 func Case(cond bool, condLabel string, sec Stmt) SwitchCase {
 	return SwitchCase{
 		CondLabel: condLabel,
@@ -231,17 +204,16 @@ func For(cond bool, condLabel string, sec Stmt) Stmt {
 	}
 }
 
-// func (f ForStmt) Find(name string) Stmt {
-// 	return f.Stmt.Find(name)
-// }
-
 func (f ForStmt) Resume(ctx *ResumeContext) (*Stop, error) {
+	// if resuming - try resume all stmts in for loop
 	if !ctx.Running {
 		b, err := f.Stmt.Resume(ctx)
 		if err != nil || b != nil {
 			return b, err
 		}
 	}
+
+	// if running - let's simulate for loop behaviour
 	if ctx.Running {
 		if !f.Cond {
 			return nil, nil
@@ -274,16 +246,17 @@ func Select(name string, ss ...WaitCond) SelectStmt {
 }
 
 func (s SelectStmt) Resume(ctx *ResumeContext) (*Stop, error) {
+	// block on this select statement immediately
 	if ctx.Running {
 		return &Stop{Select: &s}, nil
 	}
 
+	// in case this select case was triggered - let's unblock on specific step
 	if s.Name == ctx.CurStep {
 		if ctx.CallbackIndex >= len(s.Cases) {
 			return nil, fmt.Errorf("index out ouf bounds for select callback: %#v %v", *ctx, s.Cases)
 		}
 		ctx.Running = true
-		log.Print("WTF ", ctx.CallbackIndex)
 		resCase := s.Cases[ctx.CallbackIndex]
 		if resCase.Handler != nil { // Execute syncronous handler for validation purposes
 			err := reflectCall(resCase.Handler, ctx)
@@ -294,6 +267,7 @@ func (s SelectStmt) Resume(ctx *ResumeContext) (*Stop, error) {
 		return resCase.Stmt.Resume(ctx)
 	}
 
+	// try to resume on stmts inside this select
 	for _, v := range s.Cases {
 		b, err := v.Stmt.Resume(ctx)
 		if err != nil || b != nil {
@@ -364,7 +338,7 @@ type BreakStmt struct {
 }
 
 func (s BreakStmt) Resume(ctx *ResumeContext) (*Stop, error) {
-	//TODO:
+	ctx.Break = true
 	return nil, nil
 }
 
@@ -376,7 +350,8 @@ type ReturnStmt struct {
 }
 
 func (s ReturnStmt) Resume(ctx *ResumeContext) (*Stop, error) {
-	//TODO:
+	// TODO: return from function has to be scoped
+	// especially for Go stmt
 	return nil, nil
 }
 
@@ -385,11 +360,25 @@ func Return() ReturnStmt {
 }
 
 type GoStmt struct {
+	ID   func() string
 	Name string // name of goroutine
 	Stmt Stmt
 }
 
+func Go(name string, id func() string, body Stmt) GoStmt {
+	return GoStmt{
+		ID:   id,
+		Name: name,
+		Stmt: body,
+	}
+}
+
+// When we meet Go stmt - we simply create threads and continue execution.
 func (s GoStmt) Resume(ctx *ResumeContext) (*Stop, error) {
-	//TODO:
+	ctx.newThreads[s.Name] = &Thread{
+		ID:     s.ID(),
+		Name:   s.Name,
+		Status: ThreadResuming,
+	}
 	return nil, nil
 }
