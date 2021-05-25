@@ -41,7 +41,7 @@ type Threads []*Thread
 func (tt *Threads) Add(t *Thread) {
 	tr := *tt
 	for _, t2 := range tr {
-		if t.ID == t2.ID {
+		if t.ID == t2.ID && t.Name == t2.Name {
 			panic("duplicate thread is created " + t.ID)
 		}
 	}

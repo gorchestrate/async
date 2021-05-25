@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"time"
@@ -137,6 +138,7 @@ type PizzaOrderWorkflow struct {
 	Created     time.Time
 	Status      string
 	Request     PizzaOrderRequest
+	I           int
 }
 
 type Pizza struct {
@@ -180,20 +182,30 @@ func (e *PizzaOrderWorkflow) Definition() WorkflowDefinition {
 				log.Printf("init step")
 				return ActionResult{Success: true}
 			}),
-			Go("parallel thread", nil, S(
-				Step("init parallel", func() ActionResult {
-					log.Printf("init  parallel step")
+			For(e.I < 5, "creating threads", S(
+				Step("create thread1", func() ActionResult {
+					e.I = e.I + 1
+					log.Print("INCREMENT")
 					return ActionResult{Success: true}
 				}),
-				Select("wait 1 seconds",
-					After(time.Second*1, S())),
-				Step("init parallel2", func() ActionResult {
-					log.Printf("init  parallel step 2")
-					return ActionResult{Success: true}
+				Go("parallel thread", S(
+					Step("init parallel1", func() ActionResult {
+						log.Printf("init  parallel1 step")
+						return ActionResult{Success: true}
+					}),
+					Select("wait 1 seconds",
+						After(time.Second*5, S())),
+					Step("init parallel2", func() ActionResult {
+						log.Printf("init  parallel1 step 2")
+						return ActionResult{Success: true}
+					}),
+				), func() string {
+					log.Print("I : ", e.I)
+					return fmt.Sprint(e.I)
 				}),
 			)),
 			Select("wait 5 seconds",
-				After(time.Second*5, S())),
+				After(time.Second*15, S())),
 			Step("init2", func() ActionResult {
 				log.Printf("init step2")
 				return ActionResult{Success: true}

@@ -68,7 +68,7 @@ func (r *Runner) ResumeStateHandler(s *State, callback string, callbackData json
 					panic("TODO: handle errors")
 				}
 				t.Status = ThreadResuming
-				return nil, nil
+				return nil, ctx.s.DumpState(state)
 			}
 		}
 
@@ -88,8 +88,8 @@ func (r *Runner) ResumeStateHandler(s *State, callback string, callbackData json
 	if err != nil {
 		return nil, err
 	}
-	l, _ := json.Marshal(s)
-	log.Print(string(l))
+	//l, _ := json.Marshal(s)
+	//log.Print(string(l))
 	err = ctx.s.DumpState(state)
 	if err != nil {
 		return nil, err

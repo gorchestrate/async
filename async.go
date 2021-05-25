@@ -369,7 +369,7 @@ type GoStmt struct {
 	Stmt Stmt
 }
 
-func Go(name string, id func() string, body Stmt) GoStmt {
+func Go(name string, body Stmt, id func() string) GoStmt {
 	return GoStmt{
 		ID:   id,
 		Name: name,
