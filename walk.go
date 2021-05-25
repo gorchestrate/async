@@ -41,6 +41,8 @@ func Walk(s Stmt, f func(s Stmt) bool) bool {
 				return true
 			}
 		}
+	case GoStmt:
+		return Walk(x.Stmt, f)
 	case ForStmt:
 		return Walk(x.Stmt, f)
 	case SwitchStmt:

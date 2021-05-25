@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"time"
 )
 
@@ -37,8 +38,6 @@ type Handler interface{}
 type ResumeContext struct {
 	s *State
 	t *Thread
-
-	newThreads map[string]*Thread
 
 	Running        bool            // Running means process is already resumed and we are executing statements. If process is not running - we are searching for the step we should resume from.
 	CurStep        string          // CurStep of the workflow we are resuming from.
@@ -347,16 +346,21 @@ func Break() BreakStmt {
 }
 
 type ReturnStmt struct {
+	Value interface{}
 }
 
 func (s ReturnStmt) Resume(ctx *ResumeContext) (*Stop, error) {
+	return &Stop{
+		Return: s.Value,
+	}, nil
 	// TODO: return from function has to be scoped
 	// especially for Go stmt
-	return nil, nil
 }
 
-func Return() ReturnStmt {
-	return ReturnStmt{}
+func Return(v interface{}) ReturnStmt {
+	return ReturnStmt{
+		Value: v,
+	}
 }
 
 type GoStmt struct {
@@ -375,10 +379,20 @@ func Go(name string, id func() string, body Stmt) GoStmt {
 
 // When we meet Go stmt - we simply create threads and continue execution.
 func (s GoStmt) Resume(ctx *ResumeContext) (*Stop, error) {
-	ctx.newThreads[s.Name] = &Thread{
-		ID:     s.ID(),
-		Name:   s.Name,
-		Status: ThreadResuming,
+	if ctx.Running {
+		id := ""
+		if s.ID != nil {
+			id = s.ID()
+		}
+		log.Print("THREADS", len(ctx.s.Threads))
+		log.Print("ADD THREAD", id, s.Name)
+		ctx.s.Threads.Add(&Thread{
+			ID:     id,
+			Name:   s.Name,
+			Status: ThreadResuming,
+		})
+		log.Print("THREADS", len(ctx.s.Threads))
+		return nil, nil
 	}
-	return nil, nil
+	return s.Stmt.Resume(ctx)
 }

@@ -31,12 +31,32 @@ type State struct {
 	Status   WorkflowStatus  `db:"status"`   // current status
 	Input    json.RawMessage `db:"input"`    // json input of the workflow
 	Output   json.RawMessage `db:"output"`   // json output of the finished workflow. Valid only if Status = Finished
-	WaitTill int64           `db:"waittill"`
+	WaitTill int64           `db:"waittill"` // earliest waittill timestamp of all threads
 
 	Threads Threads `db:"threads"`
 }
 
 type Threads []*Thread
+
+func (tt *Threads) Add(t *Thread) {
+	tr := *tt
+	for _, t2 := range tr {
+		if t.ID == t2.ID {
+			panic("duplicate thread is created " + t.ID)
+		}
+	}
+	*tt = append(tr, t)
+}
+
+func (tt *Threads) Remove(id string) {
+	tr := *tt
+	for i, t := range tr {
+		if t.ID == id {
+			tr = append(tr[:i], tr[i+1:]...)
+		}
+	}
+	*tt = tr
+}
 
 func (tt Threads) Value() (driver.Value, error) {
 	return driver.Value(string(jsonbarr(tt))), nil
@@ -66,15 +86,13 @@ type ThreadStatus string
 const (
 	WorkflowRunning  WorkflowStatus = "Running"
 	WorkflowFinished WorkflowStatus = "Finished"
-	WorkflowPaused   WorkflowStatus = "Paused"
+	//WorkflowPaused   WorkflowStatus = "Paused"
 )
 
 const (
 	ThreadExecuting ThreadStatus = "Executing"
 	ThreadResuming  ThreadStatus = "Resuming"
 	ThreadWaiting   ThreadStatus = "Waiting"
-	ThreadFinished  ThreadStatus = "Finished"
-	ThreadPaused    ThreadStatus = "Paused"
 )
 
 func (s *State) DumpState(v interface{}) error {

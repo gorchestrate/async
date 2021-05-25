@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
 	"time"
@@ -156,92 +155,123 @@ type PizzaOrderRequest struct {
 	Pizzas    []Pizza
 }
 
-func RefundCustomer(reason string) Stmt {
-	return S(
-		Step("call manager - "+reason, func() ActionResult {
-			log.Printf("call manager")
-			return ActionResult{Success: true}
-		}),
-		Step("refund customer - "+reason, func() ActionResult {
-			log.Printf("refund customer")
-			return ActionResult{Success: true}
-		}),
-		Return(),
-	)
-}
+// func RefundCustomer(reason string) Stmt {
+// 	return S(
+// 		Step("call manager - "+reason, func() ActionResult {
+// 			log.Printf("call manager")
+// 			return ActionResult{Success: true}
+// 		}),
+// 		Step("refund customer - "+reason, func() ActionResult {
+// 			log.Printf("refund customer")
+// 			return ActionResult{Success: true}
+// 		}),
+// 		Return(),
+// 	)
+// }
 
 func (e *PizzaOrderWorkflow) Definition() WorkflowDefinition {
 	return WorkflowDefinition{
 		New: func(req PizzaOrderRequest) (*PizzaOrderResponse, error) {
 			log.Printf("got pizza order")
-			if len(req.Pizzas) == 0 {
-				return nil, fmt.Errorf("0 pizzas supplied")
-			}
-			counter++
-			e.OrderNumber = fmt.Sprint(counter)
-			e.Request = req
-			return &PizzaOrderResponse{OrderNumber: e.OrderNumber}, nil
+			return &PizzaOrderResponse{}, nil
 		},
 		Body: S(
-			Select("waiting in queue",
-				After(time.Minute*5, S(
-					Step("order timed out", func() ActionResult {
-						e.Status = "NotTaken"
-						return ActionResult{Success: true}
-					}),
-					Step("notify restaraunt manager", func() ActionResult {
-						return ActionResult{Success: true}
-					}),
-					Step("notify client", func() ActionResult {
-						return ActionResult{Success: true}
-					}),
-					Select("solve prolem",
-						After(time.Hour*24, S(Step("NotTakenOrder timed out", func() ActionResult {
-							log.Printf("order was not taken and manager did not made any action")
-							return ActionResult{Success: true}
-						}), Return())),
-						On("/confirmTimedOutOrder", nil, nil),
-						On("/failOrder", nil, S(Step("failOrder", func() ActionResult {
-							log.Printf("order failed")
-							return ActionResult{Success: true}
-						}), Return())),
-					),
-				)),
-				On("/confirmOrder", nil, nil),
-			),
-			Step("Move To Kitchen", func() ActionResult {
-				e.Status = "InKitchen"
+			Step("init", func() ActionResult {
+				log.Printf("init step")
 				return ActionResult{Success: true}
 			}),
-			Select("wait for cook to take pizza",
-				After(time.Minute*30, RefundCustomer("pizza not taken")),
-				On("/startPreparing", func() {
-					e.Status = "Cooking"
-				}, nil),
-			),
-			Select("wait for pizza to be prepared",
-				After(time.Minute*30, RefundCustomer("pizza not prepared")),
-				On("/startPreparing", func() {
-					e.Status = "Prepared"
-				}, nil),
-			),
-			Go("thread2", nil, S(
-				Step("step1 inside thread2", func() ActionResult {
-					log.Printf("step1 inside thread2")
+			Go("parallel thread", nil, S(
+				Step("init parallel", func() ActionResult {
+					log.Printf("init  parallel step")
 					return ActionResult{Success: true}
 				}),
-				Step("step2 inside thread2", func() ActionResult {
-					log.Printf("step2 inside thread2")
+				Select("wait 1 seconds",
+					After(time.Second*1, S())),
+				Step("init parallel2", func() ActionResult {
+					log.Printf("init  parallel step 2")
 					return ActionResult{Success: true}
 				}),
 			)),
-			Step("wait to delivery", func() ActionResult {
-				log.Printf("add to delivery queue")
+			Select("wait 5 seconds",
+				After(time.Second*5, S())),
+			Step("init2", func() ActionResult {
+				log.Printf("init step2")
 				return ActionResult{Success: true}
 			}),
-			Select("wait for thread2 steps",
-				After(time.Minute*1, Return()),
-			),
+			Return("result"),
 		),
 	}
+
+	// 	New: func(req PizzaOrderRequest) (*PizzaOrderResponse, error) {
+	// 		log.Printf("got pizza order")
+	// 		if len(req.Pizzas) == 0 {
+	// 			return nil, fmt.Errorf("0 pizzas supplied")
+	// 		}
+	// 		counter++
+	// 		e.OrderNumber = fmt.Sprint(counter)
+	// 		e.Request = req
+	// 		return &PizzaOrderResponse{OrderNumber: e.OrderNumber}, nil
+	// 	},
+	// 	Body: S(
+	// 		Select("waiting in queue",
+	// 			After(time.Minute*5, S(
+	// 				Step("order timed out", func() ActionResult {
+	// 					e.Status = "NotTaken"
+	// 					return ActionResult{Success: true}
+	// 				}),
+	// 				Step("notify restaraunt manager", func() ActionResult {
+	// 					return ActionResult{Success: true}
+	// 				}),
+	// 				Step("notify client", func() ActionResult {
+	// 					return ActionResult{Success: true}
+	// 				}),
+	// 				Select("solve prolem",
+	// 					After(time.Hour*24, S(Step("NotTakenOrder timed out", func() ActionResult {
+	// 						log.Printf("order was not taken and manager did not made any action")
+	// 						return ActionResult{Success: true}
+	// 					}), Return())),
+	// 					On("/confirmTimedOutOrder", nil, nil),
+	// 					On("/failOrder", nil, S(Step("failOrder", func() ActionResult {
+	// 						log.Printf("order failed")
+	// 						return ActionResult{Success: true}
+	// 					}), Return())),
+	// 				),
+	// 			)),
+	// 			On("/confirmOrder", nil, nil),
+	// 		),
+	// 		Step("Move To Kitchen", func() ActionResult {
+	// 			e.Status = "InKitchen"
+	// 			return ActionResult{Success: true}
+	// 		}),
+	// 		Select("wait for cook to take pizza",
+	// 			After(time.Minute*30, RefundCustomer("pizza not taken")),
+	// 			On("/startPreparing", func() {
+	// 				e.Status = "Cooking"
+	// 			}, nil),
+	// 		),
+	// 		Select("wait for pizza to be prepared",
+	// 			After(time.Minute*30, RefundCustomer("pizza not prepared")),
+	// 			On("/startPreparing", func() {
+	// 				e.Status = "Prepared"
+	// 			}, nil),
+	// 		),
+	// 		Go("thread2", nil, S(
+	// 			Step("step1 inside thread2", func() ActionResult {
+	// 				log.Printf("step1 inside thread2")
+	// 				return ActionResult{Success: true}
+	// 			}),
+	// 			Step("step2 inside thread2", func() ActionResult {
+	// 				log.Printf("step2 inside thread2")
+	// 				return ActionResult{Success: true}
+	// 			}),
+	// 		)),
+	// 		Step("wait to delivery", func() ActionResult {
+	// 			log.Printf("add to delivery queue")
+	// 			return ActionResult{Success: true}
+	// 		}),
+	// 		Select("wait for thread2 steps",
+	// 			After(time.Minute*1, Return()),
+	// 		),
+	// 	),
+	// }
 }
