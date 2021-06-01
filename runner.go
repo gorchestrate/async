@@ -222,11 +222,7 @@ func (r *Runner) ResumeStateHandler(s *State, req ResumeRequest) error {
 	}
 	t.PC++
 	s.PC++
-	err = ctx.s.DumpState(state)
-	if err != nil {
-		return err
-	}
-
+	s.State = state
 	return nil
 }
 
@@ -249,10 +245,7 @@ func (r *Runner) CallbackStateHandler(s *State, req CallbackRequest) error {
 	}
 	t.PC++
 	s.PC++
-	err = ctx.s.DumpState(state)
-	if err != nil {
-		return err
-	}
+	s.State = state
 	return nil
 }
 
@@ -387,11 +380,7 @@ func (r *Runner) ResumeState(ctx *ResumeContext) (WorkflowState, error) {
 	if stop != nil && stop.Return != nil && ctx.t.ID == "_main_" {
 		log.Printf("MAIN THREAD FINISHED!!!")
 		ctx.s.Status = "Finished"
-		d, err := json.Marshal(stop.Return)
-		if err != nil {
-			return state, fmt.Errorf("output marshal error: %v", err)
-		}
-		ctx.s.Output = d
+		ctx.s.Output = stop.Return
 		return state, nil
 	}
 
@@ -453,7 +442,8 @@ func (r *Runner) ExecStep(s *State, req ExecuteRequest) error {
 		t.ExecError = ""
 		t.ExecRetries = 0
 		t.ExecBackoff = time.Time{}
-		return s.DumpState(state)
+		s.State = state
+		return nil
 	}
 	if t.ExecRetries < res.Retries { // retries available
 		t.ExecError = res.Error
@@ -513,16 +503,12 @@ type ExecuteRequest struct {
 }
 
 func (r *Runner) NewWorkflow(ctx context.Context, id, name string, state interface{}) error {
-	d, err := json.Marshal(state)
-	if err != nil {
-		return err
-	}
 	s := &State{
 		ID:       id,
 		Workflow: name,
-		State:    json.RawMessage(d),
+		State:    state,
 		Status:   WorkflowRunning,
-		Output:   json.RawMessage(`{}`),
+		Output:   nil,
 		Threads: []*Thread{
 			{
 				ID:         "_main_",
@@ -532,7 +518,7 @@ func (r *Runner) NewWorkflow(ctx context.Context, id, name string, state interfa
 			},
 		},
 	}
-	err = r.createTask(s, r.cfg.BaseURL+"/resume", ResumeRequest{
+	err := r.createTask(s, r.cfg.BaseURL+"/resume", ResumeRequest{
 		WorkflowID: s.ID,
 		ThreadID:   "_main_",
 		PC:         s.PC,

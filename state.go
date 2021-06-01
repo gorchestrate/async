@@ -1,7 +1,6 @@
 package async
 
 import (
-	"encoding/json"
 	"time"
 )
 
@@ -76,15 +75,6 @@ const (
 	ThreadWaiting   ThreadStatus = "Waiting"
 	ThreadPaused    ThreadStatus = "Paused"
 )
-
-func (s *State) DumpState(v interface{}) error {
-	d, err := json.Marshal(v)
-	if err != nil {
-		return err
-	}
-	s.State = json.RawMessage(d)
-	return nil
-}
 
 func (t Thread) EventIndex(name string) int {
 	for i, e := range t.WaitEvents {
