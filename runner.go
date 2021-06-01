@@ -348,7 +348,11 @@ func (r *Runner) ResumeState(ctx *ResumeContext) (WorkflowState, error) {
 		return nil, fmt.Errorf("workflow not found: %v", ctx.s.Workflow)
 	}
 	state := wf.InitState()
-	err := json.Unmarshal(ctx.s.State, &state)
+	di, err := json.Marshal(ctx.s.State)
+	if err != nil {
+		return nil, fmt.Errorf("err marshal/unmarshal state")
+	}
+	err = json.Unmarshal(di, &state)
 	if err != nil {
 		return nil, fmt.Errorf("state unmarshal err: %v", err)
 	}
@@ -429,7 +433,11 @@ func (r *Runner) ExecStep(s *State, req ExecuteRequest) error {
 		return fmt.Errorf("workflow not found: %v", s.Workflow)
 	}
 	state := wf.InitState()
-	err := json.Unmarshal(s.State, &state)
+	di, err := json.Marshal(s.State)
+	if err != nil {
+		return fmt.Errorf("err marshal/unmarshal state")
+	}
+	err = json.Unmarshal(di, &state)
 	if err != nil {
 		return fmt.Errorf("state unmarshal err: %v", err)
 	}

@@ -22,10 +22,10 @@ type Thread struct {
 type State struct {
 	ID       string         // id of workflow instance
 	Workflow string         // name of workflow definition. Used to choose proper state type to unmarshal & resume on
-	State    []byte         // json body of workflow state
+	State    interface{}    // json body of workflow state
 	Status   WorkflowStatus // current status
-	Input    []byte         // json input of the workflow
-	Output   []byte         // json output of the finished workflow. Valid only if Status = Finished
+	Input    interface{}    // json input of the workflow
+	Output   interface{}    // json output of the finished workflow. Valid only if Status = Finished
 	LockTill time.Time
 	Threads  Threads
 	PC       int
