@@ -1,4 +1,4 @@
-package main
+package async
 
 import (
 	"encoding/json"
@@ -14,9 +14,9 @@ type Thread struct {
 	ExecError   string
 	ExecBackoff time.Time
 	WaitEvents  []string // events workflow is waiting for. Valid only if Status = Waiting, otherwise should be empty.
-	Receive     []*ReceiveOp
-	Send        []*SendOp
-	PC          int
+	//Receive     []*ReceiveOp
+	//Send        []*SendOp
+	PC int
 }
 
 type State struct {
@@ -62,11 +62,6 @@ func (tt *Threads) Find(id string) (*Thread, bool) {
 	return nil, false
 }
 
-type ReceiveOp struct {
-}
-type SendOp struct {
-}
-
 type WorkflowStatus string
 type ThreadStatus string
 
@@ -99,3 +94,8 @@ func (t Thread) EventIndex(name string) int {
 	}
 	return -1
 }
+
+// type ReceiveOp struct {
+// }
+// type SendOp struct {
+// }

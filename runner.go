@@ -1,4 +1,4 @@
-package main
+package async
 
 import (
 	"context"
@@ -33,11 +33,80 @@ import (
 
 const MaxWaittTill = 999999999999
 
+func DefaultQueueNameFunc(s *State) string {
+	return s.Workflow
+}
+
+func DefaultCollectionName(s *State) string {
+	return s.Workflow
+}
+
+type RunnerConfig struct {
+	QueueName  string
+	Collection string
+	BaseURL    string
+	ProjectID  string
+	LocationID string
+	Workflows  map[string]Workflow
+}
+
+func (cfg *RunnerConfig) SetDefaultsAndValidate() error {
+	if cfg.Collection == "" {
+		return fmt.Errorf("collection name is not set")
+	}
+	if cfg.BaseURL == "" {
+		return fmt.Errorf("baseurl is not set")
+	}
+	if cfg.ProjectID == "" {
+		return fmt.Errorf("projectID is not set")
+	}
+	if cfg.LocationID == "" {
+		return fmt.Errorf("locationID is not set")
+	}
+	if len(cfg.Workflows) == 0 {
+		return fmt.Errorf("no workflows configured")
+	}
+	return nil
+}
+
+func NewRunner(cfg RunnerConfig, db *firestore.Client, tasks *cloudtasks.Service) (*Runner, error) {
+	err := cfg.SetDefaultsAndValidate()
+	if err != nil {
+		return nil, err
+	}
+	return &Runner{cfg: cfg, db: db, tasks: tasks}, nil
+}
+
 type Runner struct {
-	DB        *firestore.Client
-	Tasks     *cloudtasks.Service
-	Workflows map[string]Workflow
-	BaseURL   string
+	cfg   RunnerConfig
+	db    *firestore.Client
+	tasks *cloudtasks.Service
+}
+
+func (r *Runner) createTask(s *State, url string, body interface{}, schedule time.Time) error {
+	d, err := json.Marshal(body)
+	if err != nil {
+		panic(err)
+	}
+	sTime := time.Now().Add(time.Millisecond * 100).Format(time.RFC3339)
+	if !schedule.IsZero() {
+		sTime = schedule.Format(time.RFC3339)
+	}
+
+	_, err = r.tasks.Projects.Locations.Queues.Tasks.Create(
+		fmt.Sprintf("projects/%v/locations/%v/queues/%v",
+			r.cfg.ProjectID, r.cfg.LocationID, r.cfg.QueueName),
+		&cloudtasks.CreateTaskRequest{
+			Task: &cloudtasks.Task{
+				ScheduleTime: sTime,
+				HttpRequest: &cloudtasks.HttpRequest{
+					Url:        url,
+					HttpMethod: "POST",
+					Body:       base64.StdEncoding.EncodeToString(d),
+				},
+			},
+		}).Do()
+	return err
 }
 
 func (r *Runner) ScheduleTasks(s *State, tID string) error {
@@ -47,26 +116,16 @@ func (r *Runner) ScheduleTasks(s *State, tID string) error {
 		}
 		t.PC++
 		log.Print("THREAD WAS ADDED ", t.ID)
-		// if new threads were added - let's schedule resume event for them
-		_, err := r.Tasks.Projects.Locations.Queues.Tasks.Create(
-			"projects/async-315408/locations/us-central1/queues/resuming",
-			&cloudtasks.CreateTaskRequest{
-				Task: &cloudtasks.Task{
-					Name: fmt.Sprintf("projects/async-315408/locations/us-central1/queues/resuming/tasks/%v_%v_%v_%v_%v", s.Workflow, s.ID, strings.ReplaceAll(t.CurStep, " ", "_"), t.ID, t.PC),
-					HttpRequest: &cloudtasks.HttpRequest{
-						Url:        r.BaseURL + "/resume",
-						HttpMethod: "POST",
-						Body: ResumeRequest{
-							WorkflowID: s.ID,
-							ThreadID:   t.ID,
-							PC:         t.PC,
-						}.ToJSONBase64(),
-					},
-				},
-			}).Do()
+		err := r.createTask(s, r.cfg.BaseURL+"/resume", ResumeRequest{
+			WorkflowID: s.ID,
+			ThreadID:   t.ID,
+			PC:         t.PC,
+		}, time.Time{})
 		if err != nil {
 			return err
 		}
+		// if new threads were added - let's schedule resume event for them
+
 	}
 	if s.Status == WorkflowFinished { // workflow finished, no event scheduling is needed
 		return nil
@@ -82,24 +141,13 @@ func (r *Runner) ScheduleTasks(s *State, tID string) error {
 
 	switch t.Status {
 	case ThreadExecuting:
-		_, err := r.Tasks.Projects.Locations.Queues.Tasks.Create(
-			"projects/async-315408/locations/us-central1/queues/executing",
-			&cloudtasks.CreateTaskRequest{
-				Task: &cloudtasks.Task{
-					Name: fmt.Sprintf("projects/async-315408/locations/us-central1/queues/executing/tasks/%v_%v_%v_%v_%v", s.Workflow, s.ID, strings.ReplaceAll(t.CurStep, " ", "_"), t.ID, t.PC),
-					HttpRequest: &cloudtasks.HttpRequest{
-						Url:        r.BaseURL + "/execute",
-						HttpMethod: "POST",
-						Body: ExecuteRequest{
-							WorkflowID: s.ID,
-							ThreadID:   t.ID,
-							PC:         t.PC,
-						}.ToJSONBase64(),
-					},
-				},
-			}).Do()
+		err := r.createTask(s, r.cfg.BaseURL+"/execute", ExecuteRequest{
+			WorkflowID: s.ID,
+			ThreadID:   t.ID,
+			PC:         t.PC,
+		}, time.Time{})
 		if err != nil {
-			panic(err)
+			return err
 		}
 	case ThreadWaiting:
 		for _, evt := range t.WaitEvents {
@@ -112,45 +160,22 @@ func (r *Runner) ScheduleTasks(s *State, tID string) error {
 				log.Printf("wtf parse: %v", err)
 				continue
 			}
-			_, err = r.Tasks.Projects.Locations.Queues.Tasks.Create(
-				"projects/async-315408/locations/us-central1/queues/timeouts",
-				&cloudtasks.CreateTaskRequest{
-					Task: &cloudtasks.Task{
-						Name:         fmt.Sprintf("projects/async-315408/locations/us-central1/queues/timeouts/tasks/%v_%v_%v_%v_%v", s.Workflow, s.ID, strings.ReplaceAll(t.CurStep, " ", "_"), t.ID, t.PC),
-						ScheduleTime: time.Now().Add(time.Second * time.Duration(seconds)).Format(time.RFC3339),
-						HttpRequest: &cloudtasks.HttpRequest{
-							Url:        r.BaseURL + "/callback",
-							HttpMethod: "POST",
-							Body: CallbackRequest{
-								WorkflowID: s.ID,
-								ThreadID:   t.ID,
-								PC:         t.PC,
-								Callback:   evt,
-							}.ToJSONBase64(),
-						},
-					},
-				}).Do()
+			err = r.createTask(s, r.cfg.BaseURL+"/callback", CallbackRequest{
+				WorkflowID: s.ID,
+				ThreadID:   t.ID,
+				PC:         t.PC,
+				Callback:   evt,
+			}, time.Now().Add(time.Second*time.Duration(seconds)))
 			if err != nil {
 				return err
 			}
 		}
 	case ThreadResuming:
-		_, err := r.Tasks.Projects.Locations.Queues.Tasks.Create(
-			"projects/async-315408/locations/us-central1/queues/resuming",
-			&cloudtasks.CreateTaskRequest{
-				Task: &cloudtasks.Task{
-					Name: fmt.Sprintf("projects/async-315408/locations/us-central1/queues/resuming/tasks/%v_%v_%v_%v_%v", s.Workflow, s.ID, strings.ReplaceAll(t.CurStep, " ", "_"), t.ID, t.PC),
-					HttpRequest: &cloudtasks.HttpRequest{
-						Url:        r.BaseURL + "/resume",
-						HttpMethod: "POST",
-						Body: ResumeRequest{
-							WorkflowID: s.ID,
-							ThreadID:   t.ID,
-							PC:         t.PC,
-						}.ToJSONBase64(),
-					},
-				},
-			}).Do()
+		err := r.createTask(s, r.cfg.BaseURL+"/resume", ResumeRequest{
+			WorkflowID: s.ID,
+			ThreadID:   t.ID,
+			PC:         t.PC,
+		}, time.Time{})
 		if err != nil {
 			return err
 		}
@@ -186,22 +211,20 @@ func (r *Runner) ResumeStateHandler(s *State, req ResumeRequest) error {
 	if !ok {
 		return fmt.Errorf("thread %v not found", req.ThreadID)
 	}
-	for i := 0; i < 100 && t.Status == ThreadResuming && s.Status == WorkflowRunning; i++ {
-		ctx := &ResumeContext{
-			s:       s,
-			t:       t,
-			Running: false,
-		}
-		state, err := r.ResumeState(ctx)
-		if err != nil {
-			return err
-		}
-		t.PC++
-		s.PC++
-		err = ctx.s.DumpState(state)
-		if err != nil {
-			return err
-		}
+	ctx := &ResumeContext{
+		s:       s,
+		t:       t,
+		Running: false,
+	}
+	state, err := r.ResumeState(ctx)
+	if err != nil {
+		return err
+	}
+	t.PC++
+	s.PC++
+	err = ctx.s.DumpState(state)
+	if err != nil {
+		return err
 	}
 
 	return nil
@@ -320,7 +343,7 @@ func (r *Runner) ResumeState(ctx *ResumeContext) (WorkflowState, error) {
 	if ctx.s.Status != WorkflowRunning {
 		return nil, fmt.Errorf("unexpected status for state: %v", ctx.s.Status)
 	}
-	wf, ok := r.Workflows[ctx.s.Workflow]
+	wf, ok := r.cfg.Workflows[ctx.s.Workflow]
 	if !ok {
 		return nil, fmt.Errorf("workflow not found: %v", ctx.s.Workflow)
 	}
@@ -351,8 +374,8 @@ func (r *Runner) ResumeState(ctx *ResumeContext) (WorkflowState, error) {
 		return state, fmt.Errorf("callback not found: %v", ctx)
 	}
 	ctx.t.WaitEvents = []string{}
-	ctx.t.Receive = nil
-	ctx.t.Send = nil
+	//ctx.t.Receive = nil
+	//ctx.t.Send = nil
 
 	// workflow finished
 	// Workflow definition should always explicitly return result.
@@ -401,7 +424,7 @@ func (r *Runner) ExecStep(s *State, req ExecuteRequest) error {
 	if t.Status != ThreadExecuting && t.Status != ThreadPaused {
 		return fmt.Errorf("unexpected status for state: %v", s.Status)
 	}
-	wf, ok := r.Workflows[s.Workflow]
+	wf, ok := r.cfg.Workflows[s.Workflow]
 	if !ok {
 		return fmt.Errorf("workflow not found: %v", s.Workflow)
 	}
@@ -467,12 +490,26 @@ func (r *Runner) ExecStep(s *State, req ExecuteRequest) error {
 // 	return tx.Commit()
 // }
 
+type CallbackRequest struct {
+	WorkflowID string
+	PC         int    // Make sure not actions were made while waiting for timeout
+	ThreadID   string // Thread to resume
+	Callback   string
+}
+
+type ExecuteRequest struct {
+	WorkflowID string
+	PC         int    // Make sure not actions were made while waiting for Execute
+	ThreadID   string // Thread to resume
+	Step       string // step to execute
+}
+
 func (r *Runner) NewWorkflow(ctx context.Context, id, name string, state interface{}) error {
 	d, err := json.Marshal(state)
 	if err != nil {
 		return err
 	}
-	s := State{
+	s := &State{
 		ID:       id,
 		Workflow: name,
 		State:    json.RawMessage(d),
@@ -487,27 +524,15 @@ func (r *Runner) NewWorkflow(ctx context.Context, id, name string, state interfa
 			},
 		},
 	}
-	task, err := r.Tasks.Projects.Locations.Queues.Tasks.Create(
-		"projects/async-315408/locations/us-central1/queues/resuming",
-		&cloudtasks.CreateTaskRequest{
-			Task: &cloudtasks.Task{
-				Name: fmt.Sprintf("projects/async-315408/locations/us-central1/queues/resuming/tasks/%v_%v_%v_%v_%v", s.Workflow, s.ID, "", "_main_", 0),
-				HttpRequest: &cloudtasks.HttpRequest{
-					Url:        r.BaseURL + "/resume",
-					HttpMethod: "POST",
-					Body: ResumeRequest{
-						WorkflowID: s.ID,
-						ThreadID:   "_main_",
-						PC:         s.PC,
-					}.ToJSONBase64(),
-				},
-			},
-		}).Do()
+	err = r.createTask(s, r.cfg.BaseURL+"/resume", ResumeRequest{
+		WorkflowID: s.ID,
+		ThreadID:   "_main_",
+		PC:         s.PC,
+	}, time.Time{})
 	if err != nil {
 		panic(err)
 	}
-	log.Printf("created initial task: %v", task.Name)
-	_, err = r.DB.Collection("workflows").Doc(id).Set(ctx, s)
+	_, err = r.db.Collection(r.cfg.Collection).Doc(id).Set(ctx, s)
 	log.Printf("ADDED")
 	return err
 }
@@ -518,19 +543,11 @@ type ResumeRequest struct {
 	PC         int
 }
 
-func (t ResumeRequest) ToJSONBase64() string {
-	d, err := json.Marshal(t)
-	if err != nil {
-		panic(err)
-	}
-	return base64.StdEncoding.EncodeToString(d)
-}
-
 func (r *Runner) LockWorkflow(ctx context.Context, id string, thread string, pc int) (*State, error) {
 	var err error
 	var doc *firestore.DocumentSnapshot
 	for i := 0; ; i++ {
-		doc, err = r.DB.Collection("workflows").Doc(id).Get(ctx)
+		doc, err = r.db.Collection(r.cfg.Collection).Doc(id).Get(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -558,7 +575,7 @@ func (r *Runner) LockWorkflow(ctx context.Context, id string, thread string, pc 
 		if t.PC < pc { // callback is in the future
 			return nil, fmt.Errorf("Lock has expired after Cloud task creation, but workflow wasn't saved. We should kill this event")
 		}
-		_, err = r.DB.Collection("workflows").Doc(id).Update(ctx,
+		_, err = r.db.Collection(r.cfg.Collection).Doc(id).Update(ctx,
 			[]firestore.Update{
 				{
 					Path:  "LockTill",
@@ -580,14 +597,14 @@ func (r *Runner) LockWorkflow(ctx context.Context, id string, thread string, pc 
 }
 
 func (r *Runner) UnlockWorkflow(ctx context.Context, id string, s *State) error {
-	doc, err := r.DB.Collection("workflows").Doc(id).Get(ctx)
+	doc, err := r.db.Collection(r.cfg.Collection).Doc(id).Get(ctx)
 	if err != nil {
 		return err
 	}
 
 	s.LockTill = time.Time{}
 	// TODO: check locktill
-	_, err = r.DB.Collection("workflows").Doc(id).Update(ctx,
+	_, err = r.db.Collection(r.cfg.Collection).Doc(id).Update(ctx,
 		[]firestore.Update{
 			{
 				Path:  "State",
