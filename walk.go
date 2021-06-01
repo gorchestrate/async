@@ -104,8 +104,8 @@ func Docs(def WorkflowDefinition) DocWorkflow {
 		switch x := s.(type) {
 		case SelectStmt:
 			for _, v := range x.Cases {
-				if v.CaseEvent != "" {
-					doc.Handlers[v.CaseEvent] = ReflectDoc(v.Handler, false)
+				if v.CallbackName != "" {
+					doc.Handlers[v.CallbackName] = ReflectDoc(v.Handler, false)
 					return false
 				}
 			}

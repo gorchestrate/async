@@ -2,11 +2,18 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/rand"
 	"net/http"
+	"os"
 	"time"
+
+	"cloud.google.com/go/firestore"
+	"github.com/afdalwahyu/gonnel"
+	cloudtasks "google.golang.org/api/cloudtasks/v2beta3"
 )
 
 var counter = 0
@@ -16,120 +23,128 @@ func jsonString(w interface{}) string {
 	return string(d)
 }
 
-// func SwaggerHandler(ww map[string]Workflow) http.HandlerFunc {
-// 	return func(w http.ResponseWriter, r *http.Request) {
-// 		paths := map[string]interface{}{}
-// 		defs := map[string]interface{}{
-// 			"Error": map[string]interface{}{
-// 				"properties": map[string]interface{}{
-// 					"code": map[string]string{
-// 						"type": "string",
-// 					},
-// 					"message": map[string]string{
-// 						"type": "string",
-// 					},
-// 				},
-// 			},
-// 		}
-// 		for _, w := range ww {
-// 			wdoc := Docs(w.InitState().Definition())
-// 			for handler, schema := range wdoc.Handlers {
-// 				for k, def := range schema.Input.Definitions {
-// 					defs[k] = cleanVersion(def)
-// 					log.Printf("add definition: %v", k)
-// 				}
-// 				for k, def := range schema.Output.Definitions {
-// 					defs[k] = cleanVersion(def)
-// 					log.Printf("add definition: %v", k)
-// 				}
-// 				paths[fmt.Sprintf("/%v/{id}%v", w.Name, handler)] = map[string]interface{}{
-// 					"post": map[string]interface{}{
-// 						"consumes": []string{"application/json"},
-// 						"produces": []string{"application/json"},
-// 						"parameters": []interface{}{
-// 							map[string]interface{}{
-// 								"in":   "body",
-// 								"name": fmt.Sprintf("%v", w.Name),
-// 								"schema": map[string]string{
-// 									"$ref": schema.Input.Ref,
-// 								},
-// 							},
-// 							map[string]interface{}{
-// 								"required": true,
-// 								"in":       "path",
-// 								"name":     "id",
-// 								"type":     "string",
-// 							},
-// 						},
-// 						"responses": map[string]interface{}{
-// 							"200": map[string]interface{}{
-// 								"description": "OK",
-// 								"schema": map[string]string{
-// 									"$ref": schema.Output.Ref,
-// 								},
-// 							},
-// 							"400": map[string]interface{}{
-// 								"description": "Error",
-// 								"schema": map[string]string{
-// 									"$ref": "#/definitions/Error",
-// 								},
-// 							},
-// 						},
-// 					},
-// 				}
+type CallbackRequest struct {
+	WorkflowID string
+	PC         int    // Make sure not actions were made while waiting for timeout
+	ThreadID   string // Thread to resume
+	Callback   string
+}
 
-// 			}
-// 		}
-
-// 		res := map[string]interface{}{
-// 			"swagger": "2.0",
-// 			"info": map[string]interface{}{
-// 				"title":   "SampleAPI",
-// 				"version": "1.0.0",
-// 			},
-// 			"host":        "api.example.com",
-// 			"basePath":    "/workflows",
-// 			"schemes":     []string{"https"},
-// 			"paths":       paths,
-// 			"definitions": defs,
-// 		}
-// 		e := json.NewEncoder(w)
-// 		e.SetIndent("", " ")
-// 		e.Encode(res)
-// 	}
-// }
-
-//r := mux.NewRouter()
-//r.HandleFunc("/swagger", SwaggerHandler(ww))
-//http.ListenAndServe(":8080", r)
-
-func main() {
-	ww := map[string]Workflow{
-		"order": {
-			Name: "order",
-			InitState: func() WorkflowState {
-				return &PizzaOrderWorkflow{}
-			},
-		},
-	}
-	log.Printf("START")
-	runner, err := NewRunner(context.Background(), "postgres://user:pass@localhost/async?sslmode=disable", ww)
+func (t CallbackRequest) ToJSONBase64() string {
+	d, err := json.Marshal(t)
 	if err != nil {
 		panic(err)
 	}
-	go func() {
-		log.Fatal(http.ListenAndServe(":8081", runner.Router()))
-	}()
+	return base64.StdEncoding.EncodeToString(d)
+}
 
-	err = runner.NewWorkflow(context.Background(), "1", "order", PizzaOrderWorkflow{})
+type ExecuteRequest struct {
+	WorkflowID string
+	PC         int    // Make sure not actions were made while waiting for Execute
+	ThreadID   string // Thread to resume
+	Step       string // step to execute
+}
+
+func (t ExecuteRequest) ToJSONBase64() string {
+	d, err := json.Marshal(t)
+	if err != nil {
+		panic(err)
+	}
+	return base64.StdEncoding.EncodeToString(d)
+}
+
+func main() {
+	rand.Seed(time.Now().Unix())
+	ctx := context.Background()
+	os.Setenv("GOOGLE_APPLICATION_CREDENTIALS", "secret.json")
+	os.Setenv("GOOGLE_CLOUD_PROJECT", "async-315408")
+
+	cTasks, err := cloudtasks.NewService(ctx)
+	if err != nil {
+		panic(err)
+	}
+	db, err := firestore.NewClient(ctx, "async-315408")
+	if err != nil {
+		panic(err)
+	}
+
+	ngrok, err := gonnel.NewClient(gonnel.Options{
+		BinaryPath: "./ngrok",
+	})
+	if err != nil {
+		panic(err)
+	}
+	defer ngrok.Close()
+
+	done := make(chan bool)
+	go ngrok.StartServer(done)
+	<-done
+
+	ngrok.AddTunnel(&gonnel.Tunnel{
+		Proto:        gonnel.HTTP,
+		Name:         "async",
+		LocalAddress: "127.0.0.1:8080",
+		//Auth:         "username:password",
+	})
+
+	err = ngrok.ConnectAll()
+	if err != nil {
+		panic(err)
+	}
+	url := ngrok.Tunnel[0].RemoteAddress
+	log.Printf("URL: %v", url)
+	defer ngrok.DisconnectAll()
+
+	r := Runner{
+		DB:      db,
+		BaseURL: url,
+		Tasks:   cTasks,
+		Workflows: map[string]Workflow{
+			"order": {
+				Name: "order",
+				InitState: func() WorkflowState {
+					return &PizzaOrderWorkflow{}
+				},
+			},
+		},
+	}
+
+	err = r.NewWorkflow(context.Background(), fmt.Sprint(rand.Intn(10000)), "order", PizzaOrderWorkflow{})
 	if err != nil {
 		panic(err)
 	}
 	log.Print("MANAGING")
-	err = runner.Manage(context.Background())
+	err = http.ListenAndServe(":8080", r.Router())
 	if err != nil {
 		panic(err)
 	}
+
+	// ww := map[string]Workflow{
+	// 	"order": {
+	// 		Name: "order",
+	// 		InitState: func() WorkflowState {
+	// 			return &PizzaOrderWorkflow{}
+	// 		},
+	// 	},
+	// }
+	// log.Printf("START")
+	// runner, err := NewRunner(context.Background(), "postgres://user:pass@localhost/async?sslmode=disable", ww)
+	// if err != nil {
+	// 	panic(err)
+	// }
+	// go func() {
+	// 	log.Fatal(http.ListenAndServe(":8081", runner.Router()))
+	// }()
+
+	// err = runner.NewWorkflow(context.Background(), "1", "order", PizzaOrderWorkflow{})
+	// if err != nil {
+	// 	panic(err)
+	// }
+	// log.Print("MANAGING")
+	// err = runner.Manage(context.Background())
+	// if err != nil {
+	// 	panic(err)
+	// }
 }
 
 type PizzaOrderWorkflow struct {
@@ -139,6 +154,7 @@ type PizzaOrderWorkflow struct {
 	Status      string
 	Request     PizzaOrderRequest
 	I           int
+	Wg          int
 }
 
 type Pizza struct {
@@ -171,6 +187,41 @@ type PizzaOrderRequest struct {
 // 	)
 // }
 
+// Add WAIT() condition function that is evaluated  each time after process is updated
+// useful to simulate sync.WorkGroup
+// can be added to Select() stmt
+
+/*
+// GCLOUD:
+Firestore as storage
+	- Optimistic locking
+Cloud tasks to delay time.After
+	- if select canceled - we try to cancel task
+		- if can't cancel - no problem - it should cancel itself
+
+Context canceling?
+	- Canceling is batch write operation, updates both task and canceled ctx
+	- After ctx has been updated via cloud - we create cloud tasks for each workflow to update
+		all processes that were affected. (for now can be done as post-action, later listen for event)
+	- We also monitor writes for all processes and if they have new ctx added
+		we will create cloud task for them. (for now can be done as post-action, later listen for event)
+
+
+// CONCLUSION:
+	- TRY OUT FIRESTORE & Cloud Tasks time.After
+	- PERFECT CLIENTSIDE LIBRARY
+	- WAIT FOR JUNE & CHECK HOW EVENT ARC UPDATE NOTIFYING WORKS (latency)
+
+
+Sending/Receiving channels:
+	JUST DO IN-PROCESS channels
+	AND IN-PROCESS WAIT
+*/
+
+// Add channels? not sure we need them.
+// All our process is executed in 1 thread and most of the time they are useless.
+// Make them scoped only to 1 process (for now, because it's easy to screw it up)
+
 func (e *PizzaOrderWorkflow) Definition() WorkflowDefinition {
 	return WorkflowDefinition{
 		New: func(req PizzaOrderRequest) (*PizzaOrderResponse, error) {
@@ -182,21 +233,23 @@ func (e *PizzaOrderWorkflow) Definition() WorkflowDefinition {
 				log.Printf("init step")
 				return ActionResult{Success: true}
 			}),
-			For(e.I < 5, "creating threads", S(
+			For(e.I < 2, "creating threads", S(
 				Step("create thread1", func() ActionResult {
-					e.I = e.I + 1
+					e.I++
+					e.Wg++
 					log.Print("INCREMENT")
 					return ActionResult{Success: true}
 				}),
 				Go("parallel thread", S(
 					Step("init parallel1", func() ActionResult {
-						log.Printf("init  parallel1 step")
+						log.Printf("init  parallel1 step !!@!#!@#!@#!@")
 						return ActionResult{Success: true}
 					}),
 					Select("wait 1 seconds",
 						After(time.Second*5, S())),
 					Step("init parallel2", func() ActionResult {
-						log.Printf("init  parallel1 step 2")
+						log.Printf("init  parallel1 step 2 !@#!#!@#!@")
+						e.Wg--
 						return ActionResult{Success: true}
 					}),
 				), func() string {
@@ -205,7 +258,13 @@ func (e *PizzaOrderWorkflow) Definition() WorkflowDefinition {
 				}),
 			)),
 			Select("wait 5 seconds",
-				After(time.Second*15, S())),
+				Wait("cond1", e.Wg == 0, S(
+					Step("WG STEP", func() ActionResult {
+						log.Printf("WG step2")
+						return ActionResult{Success: true}
+					}),
+				)),
+				After(time.Second*60, S())),
 			Step("init2", func() ActionResult {
 				log.Printf("init step2")
 				return ActionResult{Success: true}

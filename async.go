@@ -39,9 +39,9 @@ type ResumeContext struct {
 	s *State
 	t *Thread
 
-	Running        bool            // Running means process is already resumed and we are executing statements. If process is not running - we are searching for the step we should resume from.
-	CurStep        string          // CurStep of the workflow we are resuming from.
-	CallbackIndex  int             // In case we are resuming a Select - this is and index of the select case to resume
+	Running bool // Running means process is already resumed and we are executing statements. If process is not running - we are searching for the step we should resume from.
+
+	CallbackName   string          // In case we are resuming a Select - this is and index of the select case to resume
 	CallbackInput  json.RawMessage // In case we are resuming a Select with a callback event - this is the data to unmarshall into callback function parameters via reflect.
 	CallbackOutput json.RawMessage // In case we are resuming a Select with a callback event - this is the data to marshall back to client in case workflow was successfully saved.
 	Break          bool            // Used for loop management
@@ -110,7 +110,7 @@ func (s StmtStep) Resume(ctx *ResumeContext) (*Stop, error) {
 	// 2. Separate routine will pickup blocked steps and execute them
 
 	// 3. We resume from this step and continue
-	if ctx.CurStep == s.Name {
+	if ctx.t.CurStep == s.Name {
 		ctx.Running = true
 	}
 
@@ -251,19 +251,20 @@ func (s SelectStmt) Resume(ctx *ResumeContext) (*Stop, error) {
 	}
 
 	// in case this select case was triggered - let's unblock on specific step
-	if s.Name == ctx.CurStep {
-		if ctx.CallbackIndex >= len(s.Cases) {
-			return nil, fmt.Errorf("index out ouf bounds for select callback: %#v %v", *ctx, s.Cases)
-		}
+	if s.Name == ctx.t.CurStep {
 		ctx.Running = true
-		resCase := s.Cases[ctx.CallbackIndex]
-		if resCase.Handler != nil { // Execute syncronous handler for validation purposes
-			err := reflectCall(resCase.Handler, ctx)
-			if err != nil {
-				return nil, fmt.Errorf("err during handler call: %v", err)
+		for _, c := range s.Cases {
+			if c.CallbackName == ctx.CallbackName {
+				if c.Handler != nil { // Execute syncronous handler for validation purposes
+					err := reflectCall(c.Handler, ctx)
+					if err != nil {
+						return nil, fmt.Errorf("err during handler call: %v", err)
+					}
+				}
+				return c.Stmt.Resume(ctx)
 			}
 		}
-		return resCase.Stmt.Resume(ctx)
+		panic(fmt.Sprintf("callback %v for case %v  not found", ctx.CallbackName, ctx.t.CurStep))
 	}
 
 	// try to resume on stmts inside this select
@@ -280,11 +281,12 @@ func (s SelectStmt) Resume(ctx *ResumeContext) (*Stop, error) {
 }
 
 type WaitCond struct {
-	CaseAfter time.Duration // wait for time
-	CaseEvent string        // wait for event
-	CaseRecv  string        // wait for receive channel
-	CaseSend  string        // wait for send channels
-	SendData  json.RawMessage
+	CaseAfter    time.Duration // wait for time
+	CallbackName string        // wait for event
+	CaseRecv     string        // wait for receive channel
+	CaseSend     string        // wait for send channels
+	CaseWait     bool          // wait for custom condition. evaluated during func parsing
+	SendData     json.RawMessage
 
 	Handler Handler
 
@@ -294,17 +296,18 @@ type WaitCond struct {
 // After waits for specified time and then resumes the workflow. If multiple conditions are specified - only one that is fired first will fire.
 func After(d time.Duration, sec Stmt) WaitCond {
 	return WaitCond{
-		CaseAfter: d,
-		Stmt:      sec,
+		CaseAfter:    d,
+		CallbackName: fmt.Sprintf("_timeout_%v", d.Seconds()),
+		Stmt:         sec,
 	}
 }
 
 // On waits for event to come and then resumes the workflow. If multiple conditions are specified - only one that is fired first will fire.
 func On(event string, handler Handler, sec Stmt) WaitCond {
 	return WaitCond{
-		CaseEvent: event,
-		Stmt:      sec,
-		Handler:   handler,
+		CallbackName: event,
+		Stmt:         sec,
+		Handler:      handler,
 	}
 }
 
@@ -313,9 +316,17 @@ func WaitFor(name string, d time.Duration, sec ...Stmt) SelectStmt {
 	return SelectStmt{
 		Name: "waitfor-" + name,
 		Cases: []WaitCond{{
-			CaseAfter: d,
-			Stmt:      Section(sec),
+			CaseAfter:    d,
+			CallbackName: fmt.Sprintf("_timeout_%v", d.Seconds()),
+			Stmt:         Section(sec),
 		}},
+	}
+}
+
+func Wait(event string, cond bool, sec Stmt) WaitCond {
+	return WaitCond{
+		CaseWait: cond,
+		Stmt:     sec,
 	}
 }
 
@@ -325,9 +336,9 @@ func WaitEvent(event string, handler Handler, sec ...Stmt) SelectStmt {
 		Name: "select-" + event,
 		Cases: []WaitCond{
 			{
-				CaseEvent: event,
-				Stmt:      Section(sec),
-				Handler:   handler,
+				CallbackName: event,
+				Stmt:         Section(sec),
+				Handler:      handler,
 			},
 		},
 	}
