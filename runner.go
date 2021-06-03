@@ -88,6 +88,8 @@ func (r *Runner) createTask(s *State, url string, body interface{}, schedule tim
 	if err != nil {
 		panic(err)
 	}
+	//log.Printf("create task: %v", string(d))
+	//return nil
 	sTime := time.Now().Add(time.Millisecond * 100).Format(time.RFC3339)
 	if !schedule.IsZero() {
 		sTime = schedule.Format(time.RFC3339)
@@ -109,47 +111,19 @@ func (r *Runner) createTask(s *State, url string, body interface{}, schedule tim
 	return err
 }
 
-func (r *Runner) ScheduleTasks(s *State, tID string) error {
-	for _, t := range s.Threads {
-		if t.ID == tID || t.PC > 0 {
-			continue
-		}
-		t.PC++
-		log.Print("THREAD WAS ADDED ", t.ID)
-		err := r.createTask(s, r.cfg.BaseURL+"/resume", ResumeRequest{
-			WorkflowID: s.ID,
-			ThreadID:   t.ID,
-			PC:         t.PC,
-		}, time.Time{})
-		if err != nil {
-			return err
-		}
-		// if new threads were added - let's schedule resume event for them
+// Return OK only if all steps were completed
+// If steps were completed partially - still resume workflow
 
-	}
-	if s.Status == WorkflowFinished { // workflow finished, no event scheduling is needed
+// For callbacks it's a different story? - NO!
+
+// When callback is handled - lock, process, sendResumeEvent, unlock
+// When resume event is handled - lock, processALL, sendTimeoutEvent(optional), unlock
+
+func (r *Runner) ScheduleTimeoutTasks(s *State, t *Thread) error {
+	if s.Status != WorkflowRunning { // workflow finished, no event scheduling is needed
 		return nil
 	}
-	t, ok := s.Threads.Find(tID)
-	if !ok { // thread was finished and removed
-		log.Print("THREAD FINISHED")
-		return nil
-		// TODO: if process was finished - we should notify all processes that were waiting for us?
-		// Or make any other way to manage hierarchical tasks?
-	}
-	log.Printf("State %v THREAD %v %v %v", s.Status, tID, t.Status, t.WaitEvents)
-
-	switch t.Status {
-	case ThreadExecuting:
-		err := r.createTask(s, r.cfg.BaseURL+"/execute", ExecuteRequest{
-			WorkflowID: s.ID,
-			ThreadID:   t.ID,
-			PC:         t.PC,
-		}, time.Time{})
-		if err != nil {
-			return err
-		}
-	case ThreadWaiting:
+	if t.Status == ThreadWaiting {
 		for _, evt := range t.WaitEvents {
 			if !strings.HasPrefix(evt, "_timeout_") {
 				log.Print("skipping non timeout ", evt, " ")
@@ -160,7 +134,7 @@ func (r *Runner) ScheduleTasks(s *State, tID string) error {
 				log.Printf("wtf parse: %v", err)
 				continue
 			}
-			err = r.createTask(s, r.cfg.BaseURL+"/callback", CallbackRequest{
+			err = r.createTask(s, r.cfg.BaseURL+"/callback", ResumeRequest{
 				WorkflowID: s.ID,
 				ThreadID:   t.ID,
 				PC:         t.PC,
@@ -170,84 +144,11 @@ func (r *Runner) ScheduleTasks(s *State, tID string) error {
 				return err
 			}
 		}
-	case ThreadResuming:
-		err := r.createTask(s, r.cfg.BaseURL+"/resume", ResumeRequest{
-			WorkflowID: s.ID,
-			ThreadID:   t.ID,
-			PC:         t.PC,
-		}, time.Time{})
-		if err != nil {
-			return err
-		}
 	}
-
-	// log.Print("scheduling one more resume")
-	// _, err := r.Tasks.Projects.Locations.Queues.Tasks.Create(
-	// 	"projects/async-315408/locations/us-central1/queues/resuming",
-	// 	&cloudtasks.CreateTaskRequest{
-	// 		Task: &cloudtasks.Task{
-	// 			HttpRequest: &cloudtasks.HttpRequest{
-	// 				Url:        r.BaseURL + "/resuming",
-	// 				HttpMethod: "POST",
-	// 				Body: ResumeRequest{
-	// 					WorkflowID: s.ID,
-	// 					ThreadID:   "_main_",
-	// 					Version:    s.Version,
-	// 				}.ToJSONBase64(),
-	// 			},
-	// 		},
-	// 	}).Do()
-	// if err != nil {
-	// 	panic(err)
-	// }
 	return nil
 }
 
 var ErrDuplicate = fmt.Errorf("PC doesn't match (duplicate/out of time event)")
-
-// Resume process (after start or step that finished executing)
-func (r *Runner) ResumeStateHandler(s *State, req ResumeRequest) error {
-	t, ok := s.Threads.Find(req.ThreadID)
-	if !ok {
-		return fmt.Errorf("thread %v not found", req.ThreadID)
-	}
-	ctx := &ResumeContext{
-		s:       s,
-		t:       t,
-		Running: false,
-	}
-	state, err := r.ResumeState(ctx)
-	if err != nil {
-		return err
-	}
-	t.PC++
-	s.PC++
-	s.State = state
-	return nil
-}
-
-// resume process using callback
-func (r *Runner) CallbackStateHandler(s *State, req CallbackRequest) error {
-	t, ok := s.Threads.Find(req.ThreadID)
-	if !ok {
-		return fmt.Errorf("thread %v not found", req.ThreadID)
-	}
-	// TODO: time.After select case should be guaranteed to be first in definition!!!
-	ctx := &ResumeContext{
-		s:            s,
-		t:            t,
-		CallbackName: req.Callback,
-		Running:      false,
-	}
-	state, err := r.ResumeState(ctx)
-	if err != nil {
-		return err
-	}
-	t.PC++
-	s.PC++
-	s.State = state
-	return nil
-}
 
 // func (r *Runner) ResumeStateHandler(s *State, callback string, callbackData json.RawMessage, tID string) (json.RawMessage, error) {
 // 	ctx := &ResumeContext{
@@ -406,7 +307,7 @@ func (r *Runner) ResumeState(ctx *ResumeContext) (WorkflowState, error) {
 	return state, nil
 }
 
-func (r *Runner) ExecStep(s *State, req ExecuteRequest) error {
+func (r *Runner) ExecStep(s *State, req ResumeRequest) error {
 	if s.Status != WorkflowRunning {
 		return fmt.Errorf("unexpected status for state: %v", s.Status)
 	}
@@ -488,18 +389,18 @@ func (r *Runner) ExecStep(s *State, req ExecuteRequest) error {
 // 	return tx.Commit()
 // }
 
-type CallbackRequest struct {
+type ResumeRequest struct {
 	WorkflowID string
-	PC         int    // Make sure not actions were made while waiting for timeout
-	ThreadID   string // Thread to resume
-	Callback   string
+	ThreadID   string
+	PC         int
+
+	Callback string
 }
 
-type ExecuteRequest struct {
+type CallbackRequest struct {
 	WorkflowID string
-	PC         int    // Make sure not actions were made while waiting for Execute
-	ThreadID   string // Thread to resume
-	Step       string // step to execute
+	ThreadID   string
+	Callback   string
 }
 
 func (r *Runner) NewWorkflow(ctx context.Context, id, name string, state interface{}) error {
@@ -531,13 +432,7 @@ func (r *Runner) NewWorkflow(ctx context.Context, id, name string, state interfa
 	return err
 }
 
-type ResumeRequest struct {
-	WorkflowID string
-	ThreadID   string
-	PC         int
-}
-
-func (r *Runner) LockWorkflow(ctx context.Context, id string, thread string, pc int) (*State, error) {
+func (r *Runner) LockWorkflow(ctx context.Context, id string) (*State, error) {
 	var err error
 	var doc *firestore.DocumentSnapshot
 	for i := 0; ; i++ {
@@ -558,16 +453,6 @@ func (r *Runner) LockWorkflow(ctx context.Context, id string, thread string, pc 
 				time.Sleep(time.Millisecond * 100 * time.Duration(i))
 				continue
 			}
-		}
-		t, ok := s.Threads.Find(thread)
-		if !ok {
-			return nil, fmt.Errorf("thread not found for unlock: %v", thread)
-		}
-		if t.PC > pc { // callback is in the past
-			return nil, ErrDuplicate
-		}
-		if t.PC < pc { // callback is in the future
-			return nil, fmt.Errorf("Lock has expired after Cloud task creation, but workflow wasn't saved. We should kill this event")
 		}
 		_, err = r.db.Collection(r.cfg.Collection).Doc(id).Update(ctx,
 			[]firestore.Update{
@@ -633,84 +518,214 @@ func (r *Runner) UnlockWorkflow(ctx context.Context, id string, s *State) error 
 	return nil
 }
 
+func (r *Runner) UpdateStateAndExtendLock(ctx context.Context, id string, s *State) error {
+	// TODO: locks should be maintained in parallel thread while the workflow is running
+	// TODO: curcuitbreaker should be in place for pausing the task
+
+	doc, err := r.db.Collection(r.cfg.Collection).Doc(id).Get(ctx)
+	if err != nil {
+		return err
+	}
+
+	s.LockTill = time.Now().Add(time.Minute)
+	// TODO: check locktill
+	_, err = r.db.Collection(r.cfg.Collection).Doc(id).Update(ctx,
+		[]firestore.Update{
+			{
+				Path:  "State",
+				Value: s.State,
+			},
+			{
+				Path:  "Status",
+				Value: s.Status,
+			},
+			{
+				Path:  "Output",
+				Value: s.Output,
+			},
+			{
+				Path:  "LockTill",
+				Value: s.LockTill,
+			},
+			{
+				Path:  "Threads",
+				Value: s.Threads,
+			},
+			{
+				Path:  "PC",
+				Value: s.PC,
+			},
+		},
+		firestore.LastUpdateTime(doc.UpdateTime),
+	)
+	if err != nil {
+		return fmt.Errorf("err unlocking workflow: %v", err)
+	}
+	return nil
+}
+
+func (r *Runner) Resume(s *State) (found bool, err error) {
+	for _, t := range s.Threads {
+		switch t.Status {
+		case ThreadExecuting:
+			wf, ok := r.cfg.Workflows[s.Workflow]
+			if !ok {
+				return true, fmt.Errorf("workflow not found: %v", s.Workflow)
+			}
+			state := wf.InitState()
+			di, err := json.Marshal(s.State)
+			if err != nil {
+				return true, fmt.Errorf("err marshal/unmarshal state")
+			}
+			err = json.Unmarshal(di, &state)
+			if err != nil {
+				return true, fmt.Errorf("state unmarshal err: %v", err)
+			}
+			step, ok := FindStep(t.CurStep, state.Definition().Body).(StmtStep)
+			if !ok {
+				return true, fmt.Errorf("can't find step %v", t.CurStep)
+			}
+			t.PC++
+			s.PC++
+			res := step.Action()
+			if res.Success {
+				t.Status = "Resuming"
+				t.ExecError = ""
+				t.ExecRetries = 0
+				t.ExecBackoff = time.Time{}
+			} else if t.ExecRetries < res.Retries { // retries available
+				t.ExecError = res.Error
+				t.ExecRetries++
+				t.ExecBackoff = time.Now().Add(res.RetryInterval)
+			} else {
+				t.Status = "Paused"
+			}
+			s.State = state
+			return true, r.ScheduleTimeoutTasks(s, t)
+		case ThreadResuming:
+			ctx := &ResumeContext{
+				s: s,
+				t: t,
+				//CallbackName: resReq.Callback,
+				Running: false,
+			}
+			state, err := r.ResumeState(ctx)
+			if err != nil {
+				return true, err
+			}
+			t.PC++
+			s.PC++
+			s.State = state
+			return true, r.ScheduleTimeoutTasks(s, t)
+		case ThreadWaiting:
+			// ignore callbacks
+			continue
+		case ThreadPaused:
+			return true, fmt.Errorf("TODO: formalize paused threads")
+
+		}
+	}
+	return false, nil
+}
+
+func (t *Thread) WaitingForCallback(cb string) bool {
+	for _, evt := range t.WaitEvents {
+		if evt == cb {
+			return true
+		}
+	}
+	return false
+}
+
 // TODO: new workflow!?
 func (r *Runner) Router() *mux.Router {
 	mr := mux.NewRouter()
-
-	mr.HandleFunc("/execute", func(w http.ResponseWriter, req *http.Request) {
-		log.Printf("got execute")
-		var execReq ExecuteRequest
-		err := json.NewDecoder(req.Body).Decode(&execReq)
+	mr.HandleFunc("/callback", func(w http.ResponseWriter, req *http.Request) {
+		var resReq ResumeRequest
+		err := json.NewDecoder(req.Body).Decode(&resReq)
 		if err != nil {
 			log.Printf("resume parse error: %v", err)
 		}
-		s, err := r.LockWorkflow(req.Context(), execReq.WorkflowID, execReq.ThreadID, execReq.PC)
+		log.Printf("got callback %v %v %v", resReq.WorkflowID, resReq.ThreadID, resReq.PC)
+		s, err := r.LockWorkflow(req.Context(), resReq.WorkflowID)
 		if err == ErrDuplicate {
-			log.Printf("Skiping duplicate: %v", err)
+			log.Printf("Skiping duplicate resume event")
 			return
 		}
 		if err != nil {
 			panic(err)
 		}
-		err = r.ExecStep(s, execReq)
+		t, ok := s.Threads.Find(resReq.ThreadID)
+		if !ok {
+			panic(fmt.Errorf("thread %v not found", resReq.ThreadID))
+		}
+		if !t.WaitingForCallback(resReq.Callback) {
+			panic(fmt.Errorf("thread is not waiting for callback: %v", resReq.ThreadID))
+		}
+		// TODO: time.After select case should be guaranteed to be first in definition!!!
+		ctx := &ResumeContext{
+			s:            s,
+			t:            t,
+			CallbackName: resReq.Callback,
+			Running:      false,
+		}
+		state, err := r.ResumeState(ctx)
 		if err != nil {
 			panic(err)
 		}
-		err = r.ScheduleTasks(s, execReq.ThreadID)
+		t.PC++
+		s.PC++
+		s.State = state
+		err = r.ScheduleTimeoutTasks(s, t)
 		if err != nil {
 			panic(err)
 		}
+		r.createTask(s, r.cfg.BaseURL+"/resume", ResumeRequest{
+			WorkflowID: s.ID,
+		}, time.Time{})
 		err = r.UnlockWorkflow(req.Context(), s.ID, s)
 		if err != nil {
 			panic(err)
 		}
 	})
 	mr.HandleFunc("/resume", func(w http.ResponseWriter, req *http.Request) {
-		var resReq ResumeRequest
-		err := json.NewDecoder(req.Body).Decode(&resReq)
-		if err != nil {
-			log.Printf("resume parse error: %v", err)
-		}
-		log.Printf("got resuming %v %v %v", resReq.WorkflowID, resReq.ThreadID, resReq.PC)
-		s, err := r.LockWorkflow(req.Context(), resReq.WorkflowID, resReq.ThreadID, resReq.PC)
-		if err != nil {
-			panic(err)
-		}
-		err = r.ResumeStateHandler(s, resReq)
-		if err != nil {
-			panic(err)
-		}
-		err = r.ScheduleTasks(s, resReq.ThreadID)
-		if err != nil {
-			panic(err)
-		}
-		err = r.UnlockWorkflow(req.Context(), s.ID, s)
-		if err != nil {
-			panic(err)
-		}
-	})
-	mr.HandleFunc("/callback", func(w http.ResponseWriter, req *http.Request) {
-		log.Printf("got callback")
+		ctx := context.Background()
 		var resReq CallbackRequest
 		err := json.NewDecoder(req.Body).Decode(&resReq)
 		if err != nil {
+			w.WriteHeader(200)
 			log.Printf("resume parse error: %v", err)
+			return
 		}
-		s, err := r.LockWorkflow(req.Context(), resReq.WorkflowID, resReq.ThreadID, resReq.PC)
+		log.Printf("got resume %v  ", resReq.WorkflowID)
+		s, err := r.LockWorkflow(ctx, resReq.WorkflowID)
 		if err != nil {
-			panic(err)
+			w.WriteHeader(400)
+			log.Printf("failed to lock workflow: %v", err)
+			return
 		}
-		err = r.CallbackStateHandler(s, resReq)
-		if err != nil {
-			panic(err)
+		if s.Status == WorkflowFinished {
+			w.WriteHeader(200)
+			log.Printf("workflow has finished: %v", err)
+			return
 		}
-		err = r.ScheduleTasks(s, resReq.ThreadID)
-		if err != nil {
-			panic(err)
+		for i := 0; i < 1000 && s.Status == WorkflowRunning; i++ {
+			found, err := r.Resume(s)
+			if err != nil {
+				w.WriteHeader(400)
+				log.Printf("err during resume: %v", err)
+				return
+			}
+			if !found {
+				break
+			}
+			r.UpdateStateAndExtendLock(ctx, s.ID, s)
 		}
 		err = r.UnlockWorkflow(req.Context(), s.ID, s)
 		if err != nil {
-			panic(err)
+			w.WriteHeader(400)
+			log.Printf("failed to unlock workflow: %v", err)
+			return
 		}
 	})
 	return mr

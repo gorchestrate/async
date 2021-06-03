@@ -66,6 +66,7 @@ type ThreadStatus string
 
 const (
 	WorkflowRunning  WorkflowStatus = "Running"
+	WorkflowWaiting  WorkflowStatus = "Waiting"
 	WorkflowFinished WorkflowStatus = "Finished"
 )
 
