@@ -3,7 +3,6 @@ package async
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"reflect"
 	"time"
 )
@@ -23,7 +22,7 @@ type WorkflowState interface {
 
 // Handler is a generic function that is analyzed using reflection
 // It's a convenient way to specify input/output types as well as the implementation
-type Handler interface{}
+//type Handler interface{}
 
 // ResumeContext is used during workflow execution
 // It contains resume input as well as current state of the execution.
@@ -35,16 +34,14 @@ type ResumeContext struct {
 	// process is not running - we are searching for the step we should resume from.
 	Running bool
 
-	// If thread is resumed by callback - additinal info is required
-
 	// CallbackName is the name of callback that is need to be resumed
 	CallbackName string
-	// CallbackInput is an input to a syncronous Handler is executed to validate input & do immediate actions
-	CallbackInput json.RawMessage
-	// Return result from this Handler. Result is returned only after wokflow was updated
+
+	CallbackInput  json.RawMessage
 	CallbackOutput json.RawMessage
 
-	Break bool // Used for loop management
+	// Used for loop management
+	Break bool
 }
 
 // Stop tells us that syncronous part of the workflow has finished. It means we either:
@@ -251,6 +248,19 @@ func Select(name string, ss ...WaitCond) SelectStmt {
 func (s SelectStmt) Resume(ctx *ResumeContext) (*Stop, error) {
 	// block on this select statement immediately
 	if ctx.Running {
+		for _, c := range s.Cases {
+			if c.Handler != nil {
+				err := c.Handler.Setup(CallbackRequest{
+					WorkflowID: ctx.s.ID,
+					ThreadID:   ctx.t.ID,
+					Callback:   c.CallbackName,
+					PC:         ctx.t.PC,
+				})
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
 		return &Stop{Select: &s}, nil
 	}
 
@@ -258,11 +268,35 @@ func (s SelectStmt) Resume(ctx *ResumeContext) (*Stop, error) {
 	if s.Name == ctx.t.CurStep {
 		ctx.Running = true
 		for _, c := range s.Cases {
+			if c.Handler != nil {
+				err := c.Handler.Teardown(CallbackRequest{
+					WorkflowID: ctx.s.ID,
+					ThreadID:   ctx.t.ID,
+					Callback:   c.CallbackName,
+					PC:         ctx.t.PC, // TODO: different PC?
+				})
+				// TODO:  With current implementation - if we get error during execution
+				// teardown will be executed, but workflow won't be saved, resulting in missed callback.
+				// Option 1: handle callback asynchronously (i.e. save first, execute later)
+				// Option 2: teardown only after callback was resumed and saved, for example
+				// we can save teardown functions into execution context
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+		for _, c := range s.Cases {
 			if c.CallbackName == ctx.CallbackName {
 				if c.Handler != nil { // Execute syncronous handler for validation purposes
-					err := reflectCall(c.Handler, ctx)
+					out, err := c.Handler.Handler(CallbackRequest{
+						WorkflowID: ctx.s.ID,
+						ThreadID:   ctx.t.ID,
+						Callback:   c.CallbackName,
+						PC:         ctx.t.PC, // TODO: different PC?
+					}, ctx.CallbackInput)
+					ctx.CallbackOutput = out
 					if err != nil {
-						return nil, fmt.Errorf("err during handler call: %v", err)
+						return nil, err
 					}
 				}
 				return c.Stmt.Resume(ctx)
@@ -284,43 +318,27 @@ func (s SelectStmt) Resume(ctx *ResumeContext) (*Stop, error) {
 	return nil, nil
 }
 
-type WaitCond struct {
-	CaseAfter    time.Duration // wait for time
-	CallbackName string        // wait for event
-	CaseRecv     string        // wait for receive channel
-	CaseSend     string        // wait for send channels
-	CaseWait     bool          // wait for custom condition. evaluated during func parsing
-	SendData     json.RawMessage
+type Handler interface {
+	Setup(req CallbackRequest) error
+	Teardown(req CallbackRequest) error
+	Handler(req CallbackRequest, input json.RawMessage) (json.RawMessage, error)
+}
 
-	Handler Handler
+type WaitCond struct {
+	CallbackName string
+	Handler      Handler
 
 	Stmt Stmt
 }
 
-// After waits for specified time and then resumes the workflow. If multiple conditions are specified - only one that is fired first will fire.
-func After(d time.Duration, sec Stmt) WaitCond {
-	return WaitCond{
-		CaseAfter:    d,
-		CallbackName: fmt.Sprintf("_timeout_%v", d.Seconds()),
-		Stmt:         sec,
-	}
-}
-
 // On waits for event to come and then resumes the workflow. If multiple conditions are specified - only one that is fired first will fire.
-func On(event string, handler Handler, sec Stmt) WaitCond {
+func Event(event string, handler Handler, sec Stmt) WaitCond {
 	return WaitCond{
 		CallbackName: event,
 		Stmt:         sec,
 		Handler:      handler,
 	}
 }
-
-// func Wait(event string, cond bool, sec Stmt) WaitCond {
-// 	return WaitCond{
-// 		CaseWait: cond,
-// 		Stmt:     sec,
-// 	}
-// }
 
 type BreakStmt struct {
 }
@@ -343,8 +361,6 @@ func (s ReturnStmt) Resume(ctx *ResumeContext) (*Stop, error) {
 	return &Stop{
 		Return: s.Value,
 	}, nil
-	// TODO: return from function has to be scoped
-	// especially for Go stmt
 }
 
 // Finish workflow and return result
@@ -376,48 +392,14 @@ func (s GoStmt) Resume(ctx *ResumeContext) (*Stop, error) {
 		if s.ID != nil {
 			id = s.ID()
 		}
-		log.Print("THREADS", len(ctx.s.Threads))
-		log.Print("ADD THREAD", id, s.Name)
 		ctx.s.Threads.Add(&Thread{
 			ID:     id,
 			Name:   s.Name,
 			Status: ThreadResuming,
 		})
-		log.Print("THREADS", len(ctx.s.Threads))
 		return nil, nil
 	}
 	return s.Stmt.Resume(ctx)
-}
-
-func reflectCall(handler Handler, ctx *ResumeContext) error {
-	h := reflect.ValueOf(handler)
-	ht := h.Type()
-
-	in := []reflect.Value{}
-	if ht.NumIn() == 1 {
-		v := reflect.New(ht.In(0)).Interface()
-		err := json.Unmarshal(ctx.CallbackInput, v)
-		if err != nil {
-			return err
-		}
-		in = []reflect.Value{reflect.ValueOf(v).Elem()}
-	}
-	res := h.Call(in)
-	if len(res) == 1 {
-		return res[0].Interface().(error)
-	}
-	if len(res) == 2 {
-		d, err := json.Marshal(res[0].Interface())
-		if err != nil {
-			return fmt.Errorf("err mashaling callback output: %v", err)
-		}
-		ctx.CallbackOutput = d
-		if res[1].Interface() == nil {
-			return nil
-		}
-		return res[1].Interface().(error)
-	}
-	return nil
 }
 
 func FindStep(name string, sec Stmt) Stmt {

@@ -31,9 +31,7 @@ type Thread struct {
 	ExecError   string
 	ExecBackoff time.Time
 	WaitEvents  []string // events workflow is waiting for. Valid only if Status = Waiting, otherwise should be empty.
-	//Receive     []*ReceiveOp
-	//Send        []*SendOp
-	PC int
+	PC          int
 }
 
 type Threads []*Thread
@@ -83,22 +81,9 @@ const (
 	ThreadPaused    ThreadStatus = "Paused"
 )
 
-// Get(id)
-// Lock(id)
-// UpdateLocked(id)
-// Unlock(id)
-
-// Callback:
-// ScheduleCallback()
-// SetResume()
-
-// OnCallback()
-// OnResume()
-
 type UpdaterFunc func(ctx context.Context, s *State, save func() error) error
 
 type DB interface {
-	//Get(ctx context.Context, id string) (*State, error)
 	Create(ctx context.Context, id string, s *State) error
 	RunLocked(ctx context.Context, id string, f UpdaterFunc) error
 }
@@ -114,42 +99,7 @@ type Runner struct {
 	TaskMgr   TaskMgr
 }
 
-// func (r *Runner) createTask(s *State, url string, body interface{}, schedule time.Time) error {
-// 	d, err := json.Marshal(body)
-// 	if err != nil {
-// 		panic(err)
-// 	}
-// 	//log.Printf("create task: %v", string(d))
-// 	//return nil
-// 	sTime := time.Now().Add(time.Millisecond * 100).Format(time.RFC3339)
-// 	if !schedule.IsZero() {
-// 		sTime = schedule.Format(time.RFC3339)
-// 	}
-// 	_, err = r.tasks.Projects.Locations.Queues.Tasks.Create(
-// 		fmt.Sprintf("projects/%v/locations/%v/queues/%v",
-// 			r.cfg.ProjectID, r.cfg.LocationID, r.cfg.QueueName),
-// 		&cloudtasks.CreateTaskRequest{
-// 			Task: &cloudtasks.Task{
-// 				ScheduleTime: sTime,
-// 				HttpRequest: &cloudtasks.HttpRequest{
-// 					Url:        url,
-// 					HttpMethod: "POST",
-// 					Body:       base64.StdEncoding.EncodeToString(d),
-// 				},
-// 			},
-// 		}).Do()
-// 	return err
-// }
-
-// Return OK only if all steps were completed
-// If steps were completed partially - still resume workflow
-
-// For callbacks it's a different story? - NO!
-
-// When callback is handled - lock, process, sendResumeEvent, unlock
-// When resume event is handled - lock, processALL, sendTimeoutEvent(optional), unlock
-
-func (r *Runner) ScheduleTimeoutTasks(s *State, t *Thread) error {
+func (r *Runner) ScheduleTimeoutTasks(ctx context.Context, s *State, t *Thread) error {
 	if s.Status != WorkflowRunning { // workflow finished, no event scheduling is needed
 		return nil
 	}
@@ -164,7 +114,7 @@ func (r *Runner) ScheduleTimeoutTasks(s *State, t *Thread) error {
 				log.Printf("wtf parse: %v", err)
 				continue
 			}
-			err = r.TaskMgr.SetTimeout(context.TODO(), time.Second*time.Duration(seconds), CallbackRequest{
+			err = r.TaskMgr.SetTimeout(ctx, time.Second*time.Duration(seconds), CallbackRequest{
 				WorkflowID: s.ID,
 				ThreadID:   t.ID,
 				Callback:   evt,
@@ -234,6 +184,12 @@ func (r *Runner) ResumeState(ctx *ResumeContext) (WorkflowState, error) {
 		log.Printf("MAIN THREAD FINISHED!!!")
 		ctx.s.Status = "Finished"
 		ctx.s.Output = stop.Return
+		return state, nil
+	}
+
+	// thread returned
+	if stop != nil && stop.Return != nil {
+		ctx.s.Threads.Remove(ctx.t.ID)
 		return state, nil
 	}
 
@@ -351,7 +307,7 @@ func (r *Runner) NewWorkflow(ctx context.Context, id, name string, state interfa
 	return err
 }
 
-func (r *Runner) Resume(s *State) (found bool, err error) {
+func (r *Runner) Resume(ctx context.Context, s *State) (found bool, err error) {
 	for _, t := range s.Threads {
 		switch t.Status {
 		case ThreadExecuting:
@@ -388,22 +344,22 @@ func (r *Runner) Resume(s *State) (found bool, err error) {
 				t.Status = "Paused"
 			}
 			s.State = state
-			return true, r.ScheduleTimeoutTasks(s, t)
+			return true, r.ScheduleTimeoutTasks(ctx, s, t)
 		case ThreadResuming:
-			ctx := &ResumeContext{
+			rCtx := &ResumeContext{
 				s: s,
 				t: t,
 				//CallbackName: resReq.Callback,
 				Running: false,
 			}
-			state, err := r.ResumeState(ctx)
+			state, err := r.ResumeState(rCtx)
 			if err != nil {
 				return true, err
 			}
 			t.PC++
 			s.PC++
 			s.State = state
-			return true, r.ScheduleTimeoutTasks(s, t)
+			return true, r.ScheduleTimeoutTasks(ctx, s, t)
 		case ThreadWaiting:
 			// ignore callbacks
 			continue
@@ -430,7 +386,7 @@ func (r *Runner) OnResume(ctx context.Context, req ResumeRequest) error {
 			return fmt.Errorf("workflow has finished")
 		}
 		for i := 0; i < 1000 && s.Status == WorkflowRunning; i++ {
-			found, err := r.Resume(s)
+			found, err := r.Resume(ctx, s)
 			if err != nil {
 				return fmt.Errorf("err during resume: %v", err)
 			}
@@ -468,7 +424,7 @@ func (r *Runner) OnCallback(ctx context.Context, req CallbackRequest) error {
 		t.PC++
 		s.PC++
 		s.State = state
-		err = r.ScheduleTimeoutTasks(s, t)
+		err = r.ScheduleTimeoutTasks(ctx, s, t)
 		if err != nil {
 			return err
 		}
@@ -481,191 +437,3 @@ func (r *Runner) OnCallback(ctx context.Context, req CallbackRequest) error {
 		return save()
 	})
 }
-
-// func (r *Runner) ResumeSteps(ctx context.Context) error {
-// 	tx, err := r.DB.Beginx()
-// 	if err != nil {
-// 		return err
-// 	}
-// 	fmt.Print(".")
-// 	states := []State{}
-// 	err = tx.Select(&states, `
-// 	SELECT *
-// 	FROM states s
-// 	WHERE
-// 		waittill < $1
-// 	FOR UPDATE SKIP LOCKED`, time.Now().Unix())
-// 	if err != nil {
-// 		return fmt.Errorf("state select query error: %v", err)
-// 	}
-// 	defer tx.Rollback()
-// 	for _, s := range states {
-// 		// TODO: err array, parallel execution
-// 		// d, _ := json.MarshalIndent(s, "", " ")
-// 		// log.Printf("GOT %v", string(d))
-// 		_, err := r.ResumeStateHandler(&s, "", nil, "")
-// 		if err != nil {
-// 			return fmt.Errorf("state %v handle failed: %v", s.ID, err)
-// 		}
-// 		err = s.Update(ctx, tx)
-// 		if err != nil {
-// 			return err
-// 		}
-// 	}
-// 	return tx.Commit()
-// }
-
-// func (r *Runner) ResumeStateHandler(s *State, callback string, callbackData json.RawMessage, tID string) (json.RawMessage, error) {
-// 	ctx := &ResumeContext{
-// 		s:       s,
-// 		Running: false,
-// 	}
-// 	sort.Slice(s.Threads, func(i, j int) bool {
-// 		return s.Threads[i].WaitTill < s.Threads[j].WaitTill
-// 	})
-// 	if callback != "" {
-// 		for _, t := range s.Threads { // choose thread we should resume
-// 			if tID != "" && tID != t.ID { // if tID was supplied - it should also match
-// 				continue
-// 			}
-// 			for i, evt := range t.WaitEvents {
-// 				if evt == callback {
-// 					ctx.t = t
-// 					ctx.CurStep = t.CurStep
-// 					ctx.CallbackIndex = i
-// 					ctx.CallbackInput = callbackData
-// 				}
-// 			}
-// 		}
-// 	} else {
-// 		for _, t := range s.Threads {
-// 			if t.Status == ThreadExecuting {
-// 				wf, ok := r.Workflows[ctx.s.Workflow]
-// 				if !ok {
-// 					return nil, fmt.Errorf("workflow not found: %v", ctx.s.Workflow)
-// 				}
-// 				state := wf.InitState()
-// 				err := json.Unmarshal(ctx.s.State, &state)
-// 				if err != nil {
-// 					return nil, fmt.Errorf("state unmarshal err: %v", err)
-// 				}
-// 				stmt := FindStep(t.CurStep, state.Definition().Body)
-// 				if stmt == nil {
-// 					panic("step to execute is nil")
-// 				}
-// 				step, ok := stmt.(StmtStep)
-// 				if !ok {
-// 					panic("step to execute is not a step")
-// 				}
-// 				result := step.Action()
-// 				if result.Error != "" {
-// 					panic("TODO: handle errors")
-// 				}
-// 				t.Status = ThreadResuming
-// 				return nil, ctx.s.DumpState(state)
-// 			}
-// 		}
-
-// 		for _, t := range s.Threads {
-// 			if t.WaitTill != MaxWaittTill {
-// 				ctx.t = t
-// 				ctx.CurStep = t.CurStep
-// 				break
-// 			}
-// 		}
-// 	}
-// 	if ctx.t == nil {
-// 		return nil, fmt.Errorf("thread callback not found: %v", callback)
-// 	}
-// 	log.Printf("RESUMING %v %v", ctx.t.Name, ctx.t.ID)
-// 	state, err := r.ResumeState(ctx)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	err = ctx.s.DumpState(state)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	if ctx.s.Status == WorkflowFinished {
-// 		return ctx.CallbackOutput, nil
-// 	}
-
-// 	return ctx.CallbackOutput, nil
-// }
-
-// type CBHandler struct {
-// 	Handler http.HandlerFunc
-// 	//Docs    HandlerDocs
-// }
-
-// following function inputs are supported for handlers
-// func()
-// func(Context.Context)
-// func(Struct)
-// func(Context.Context, Struct)
-
-// following function outputs are supported for handlers
-// func() {}
-// func() {}  error
-// func() {}  Struct
-// func() {}  (Struct,error)
-
-// following function signature is allowed for exceptional use-cases, but discouraged to be used
-// CBHandler
-// type Empty struct {
-// }
-
-// func isContext(t reflect.Type) bool {
-// 	return t.Implements(reflect.TypeOf((*context.Context)(nil)).Elem())
-// }
-// func isError(t reflect.Type) bool {
-// 	return t.Implements(reflect.TypeOf((*error)(nil)).Elem())
-// }
-
-// func ReflectDoc(handler Handler, inline bool) HandlerDocs {
-// 	r := jsonschema.Reflector{
-// 		FullyQualifyTypeNames:     true,
-// 		AllowAdditionalProperties: true,
-// 		DoNotReference:            inline,
-// 	}
-// 	docs := HandlerDocs{
-// 		Input:  r.Reflect(Empty{}),
-// 		Output: r.Reflect(Empty{}),
-// 	}
-// 	if handler == nil {
-// 		return docs
-// 	}
-// 	h := reflect.ValueOf(handler)
-// 	ht := h.Type()
-// 	switch {
-// 	case ht.NumIn() == 0:
-// 	case ht.NumIn() == 1 && isContext(ht.In(0)):
-// 	case ht.NumIn() == 1 && !isContext(ht.In(0)):
-// 		docs.Input = r.ReflectFromType(ht.In(0))
-// 	case ht.NumIn() == 2 && isContext(ht.In(0)):
-// 		docs.Input = r.ReflectFromType(ht.In(1))
-// 	default:
-// 		panic(`following function inputs are supported for handlers
-// func()
-// func(Context.Context)
-// func(Struct)
-// func(Context.Context, Struct)`)
-// 	}
-
-// 	switch {
-// 	case ht.NumOut() == 0:
-// 	case ht.NumOut() == 1 && isError(ht.Out(0)):
-// 	case ht.NumOut() == 1 && !isError(ht.Out(0)):
-// 		docs.Output = r.ReflectFromType(ht.Out(0))
-// 	case ht.NumOut() == 2 && isError(ht.Out(1)):
-// 		docs.Output = r.ReflectFromType(ht.Out(0))
-// 	default:
-// 		panic(`following function outputs are supported for handlers
-// func() {}
-// func() {}  error
-// func() {}  Struct
-// func() {}  (Struct,error)`)
-// 	}
-
-// 	return docs
-// }
