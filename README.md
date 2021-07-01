@@ -54,17 +54,16 @@ func (s* MyWorkflowState) Definition() async.Section {
 
 ## Why you want to use this
 #### This is a library, not a framework
-* Store workflows in DB or **your** choice
-* Schedule workflows using **your** way
-* Handle callbacks using **your** architecture
-* It's just 800 lines of code, customize it if you need.
+* Store workflows in DB of **your** choice
+* Schedule workflows using **your** scheduler
+* Handle callbacks the way **you** want
+* It's just 800 lines of code, customize it for **your** needs
 
 
-### Features others don't have
-* Define all your workflow actions **right in the Go code**. No need for boring workflow<>action separation boilerplates.
+#### It has some really good features 
 * Update workflow definitions **while they are running**. If hotfix needed - you can deploy new version without having to restart workflows.
+* Define all your workflow actions **right in the Go code**. No need for boring workflow<>action separation boilerplates.
 * Run multiple goroutines(threads) in your workflow. No need to create multiple workflows to do parallel tasks.
-
 
 #### Extensible
 * Add **your** workflow routines and reuse them:  Approvals, Timers, Exporting, Logging, Notifications, Verifications... 
