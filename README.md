@@ -1,21 +1,7 @@
-### [Gorchestrate](https://github.com/gorchestrate/core) Go SDK
+### Gorchestrate your workflows! 
 
-Usage example: [https://github.com/gorchestrate/pizzaapp](https://github.com/gorchestrate/pizzaapp)
+**async** is a Go library to integrate workflow management into your application using your existing infrastructure.
 
-## Why you want to use this
-#### Infrastructure-agnostic
-* Store workflows in DB or **your** choice
-* Schedule workflows using **your** way
-* Handle callbacks using **your** architecture
-
-#### Flexible
-* Define all your workflow actions **right in the Go code**. No need for boring workflow<>action separation boilerplates.
-* All workflow execution states are saved in DB.  If you have corrupted data in workflows - you can fix it inplace. If server goes down - workflow will continue execution on other server.
-* Update workflow definitions **while they are running**. If hotfix needed - you can deploy new version without having to restart workflows.
-
-#### Extensible
-* Add **your** workflow routines and reuse them:  Approvals, Timers, Exporting, Logging, Notifications, Verifications... 
-* Add **your** wait conditions:  Wait for user input, Wait for approval, Wait for timeout, Wait for task finished ...
 
 ## Example
 ```Go
@@ -27,7 +13,15 @@ type MyWorkflowState struct {
 
 func (s* MyWorkflowState) Definition() async.Section {
     return S(
-        Wait("my condition",
+        Step("first action", func() error {
+            log.Printf("workflow has started")
+        }),
+        Go("notification goroutine", S(
+            Step("parallel thread", func() error {
+                log.Printf("execute stuff in parallel, while we are waiting for approval")
+            }),
+        ), "g1"),
+        Wait("waiting for approval",
             On("slackApproval", WaitForUserAction{
                 Approve: func() {
                     s.Approved = true
@@ -57,6 +51,24 @@ func (s* MyWorkflowState) Definition() async.Section {
 }
 
 ```
+
+## Why you want to use this
+#### This is a library, not a framework
+* Store workflows in DB or **your** choice
+* Schedule workflows using **your** way
+* Handle callbacks using **your** architecture
+* It's just 800 lines of code, customize it if you need.
+
+
+### Features others don't have
+* Define all your workflow actions **right in the Go code**. No need for boring workflow<>action separation boilerplates.
+* Update workflow definitions **while they are running**. If hotfix needed - you can deploy new version without having to restart workflows.
+* Run multiple goroutines(threads) in your workflow. No need to create multiple workflows to do parallel tasks.
+
+
+#### Extensible
+* Add **your** workflow routines and reuse them:  Approvals, Timers, Exporting, Logging, Notifications, Verifications... 
+* Add **your** wait conditions:  Wait for user input, Wait for approval, Wait for timeout, Wait for task finished ...
 
 
 ## Architecture
@@ -91,3 +103,12 @@ Data from Handler is passed to it's CallbackManager to Setup() a waiting conditi
 When CallbackManager receives event and calls OnCallback() - Handle()  method will be executed to handle this callback.
 
 It's very convenient to define callbacks with closures, since handling different callback conditions can be done inside the workflow
+
+
+
+### Is it production ready?
+Not at this stage. API may change and there are definitely some bugs that has to be fixed.
+
+I'd be glad if some really smart guy will help me out to make this library better. 
+
+Feedback is welcome!
