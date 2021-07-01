@@ -55,8 +55,8 @@ func (s* MyWorkflowState) Definition() async.Section {
 ## Why you want to use this
 #### This is a library, not a framework
 * Store workflows in DB of **your** choice
-* Schedule workflows using **your** scheduler
-* Handle callbacks the way **you** want
+* Schedule workflows using **your** approach
+* Handle callbacks with API **you** create
 * It's just 800 lines of code, customize it for **your** needs
 
 
