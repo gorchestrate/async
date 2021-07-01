@@ -20,10 +20,6 @@ type WorkflowState interface {
 	Definition() Section
 }
 
-// Handler is a generic function that is analyzed using reflection
-// It's a convenient way to specify input/output types as well as the implementation
-//type Handler interface{}
-
 // ResumeContext is used during workflow execution
 // It contains resume input as well as current state of the execution.
 type ResumeContext struct {
@@ -34,9 +30,8 @@ type ResumeContext struct {
 	// process is not running - we are searching for the step we should resume from.
 	Running bool
 
-	// CallbackName is the name of callback that is need to be resumed
-	CallbackName string
-
+	// In case workflow is resumed by a callback
+	Callback       CallbackRequest
 	CallbackInput  json.RawMessage
 	CallbackOutput json.RawMessage
 
@@ -160,22 +155,20 @@ func (s SwitchStmt) Resume(ctx *ResumeContext) (*Stop, error) {
 }
 
 // execute statements if ...
-func If(cond bool, condLabel string, sec Stmt) SwitchStmt {
+func If(cond bool, sec Stmt) SwitchStmt {
 	return SwitchStmt{
 		SwitchCase{
-			CondLabel: condLabel,
-			Cond:      cond,
-			Stmt:      sec,
+			Cond: cond,
+			Stmt: sec,
 		},
 	}
 }
 
 // execute statements if ...
-func Case(cond bool, condLabel string, sec Stmt) SwitchCase {
+func Case(cond bool, sec Stmt) SwitchCase {
 	return SwitchCase{
-		CondLabel: condLabel,
-		Cond:      cond,
-		Stmt:      sec,
+		Cond: cond,
+		Stmt: sec,
 	}
 }
 
@@ -238,29 +231,23 @@ type SelectStmt struct {
 }
 
 // wait for multiple conditions and execute only one
-func Select(name string, ss ...WaitCond) SelectStmt {
+func Wait(name string, ss ...WaitCond) SelectStmt {
 	return SelectStmt{
 		Name:  name,
 		Cases: ss,
 	}
 }
 
+func nResume(ctx *ResumeContext, s Stmt) (*Stop, error) {
+	if s == nil {
+		return nil, nil
+	}
+	return s.Resume(ctx)
+}
+
 func (s SelectStmt) Resume(ctx *ResumeContext) (*Stop, error) {
 	// block on this select statement immediately
 	if ctx.Running {
-		for _, c := range s.Cases {
-			if c.Handler != nil {
-				err := c.Handler.Setup(CallbackRequest{
-					WorkflowID: ctx.s.ID,
-					ThreadID:   ctx.t.ID,
-					Callback:   c.CallbackName,
-					PC:         ctx.t.PC,
-				})
-				if err != nil {
-					return nil, err
-				}
-			}
-		}
 		return &Stop{Select: &s}, nil
 	}
 
@@ -268,46 +255,23 @@ func (s SelectStmt) Resume(ctx *ResumeContext) (*Stop, error) {
 	if s.Name == ctx.t.CurStep {
 		ctx.Running = true
 		for _, c := range s.Cases {
-			if c.Handler != nil {
-				err := c.Handler.Teardown(CallbackRequest{
-					WorkflowID: ctx.s.ID,
-					ThreadID:   ctx.t.ID,
-					Callback:   c.CallbackName,
-					PC:         ctx.t.PC, // TODO: different PC?
-				})
-				// TODO:  With current implementation - if we get error during execution
-				// teardown will be executed, but workflow won't be saved, resulting in missed callback.
-				// Option 1: handle callback asynchronously (i.e. save first, execute later)
-				// Option 2: teardown only after callback was resumed and saved, for example
-				// we can save teardown functions into execution context
-				if err != nil {
-					return nil, err
-				}
-			}
-		}
-		for _, c := range s.Cases {
-			if c.CallbackName == ctx.CallbackName {
-				if c.Handler != nil { // Execute syncronous handler for validation purposes
-					out, err := c.Handler.Handler(CallbackRequest{
-						WorkflowID: ctx.s.ID,
-						ThreadID:   ctx.t.ID,
-						Callback:   c.CallbackName,
-						PC:         ctx.t.PC, // TODO: different PC?
-					}, ctx.CallbackInput)
-					ctx.CallbackOutput = out
+			if c.Callback.Name == ctx.Callback.Name {
+				if c.Handler != nil { // Execute syncronous handler in place
+					out, err := c.Handler.Handle(ctx.Callback, ctx.CallbackInput)
 					if err != nil {
 						return nil, err
 					}
+					ctx.CallbackOutput = out
 				}
-				return c.Stmt.Resume(ctx)
+				return nResume(ctx, c.Stmt)
 			}
 		}
-		panic(fmt.Sprintf("callback %v for case %v  not found", ctx.CallbackName, ctx.t.CurStep))
+		panic(fmt.Sprintf("callback %v for case %v  not found", ctx.Callback.Name, ctx.t.CurStep))
 	}
 
 	// try to resume on stmts inside this select
 	for _, v := range s.Cases {
-		b, err := v.Stmt.Resume(ctx)
+		b, err := nResume(ctx, v.Stmt)
 		if err != nil || b != nil {
 			return b, err
 		}
@@ -319,24 +283,27 @@ func (s SelectStmt) Resume(ctx *ResumeContext) (*Stop, error) {
 }
 
 type Handler interface {
-	Setup(req CallbackRequest) error
-	Teardown(req CallbackRequest) error
-	Handler(req CallbackRequest, input json.RawMessage) (json.RawMessage, error)
+	Type() string                                                               // used to identify proper CallbackManager
+	Marshal() json.RawMessage                                                   // data passed to CallbackManager
+	Handle(req CallbackRequest, input json.RawMessage) (json.RawMessage, error) // called when
 }
 
 type WaitCond struct {
-	CallbackName string
-	Handler      Handler
+	Callback CallbackRequest
+	Handler  Handler
 
 	Stmt Stmt
 }
 
-// On waits for event to come and then resumes the workflow. If multiple conditions are specified - only one that is fired first will fire.
-func Event(event string, handler Handler, sec Stmt) WaitCond {
+func On(event string, handler Handler, stmts ...Stmt) WaitCond {
 	return WaitCond{
-		CallbackName: event,
-		Stmt:         sec,
-		Handler:      handler,
+		Callback: CallbackRequest{
+			Type: handler.Type(),
+			Name: event,
+			Data: handler.Marshal(),
+		},
+		Stmt:    Section(stmts),
+		Handler: handler,
 	}
 }
 

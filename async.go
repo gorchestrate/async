@@ -5,10 +5,23 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"strconv"
-	"strings"
 	"time"
 )
+
+type WaitEventStatus string
+
+const (
+	EventPending       WaitEventStatus = "Pending"       // event is just created
+	EventSetup         WaitEventStatus = "Setup"         // event was successfully setup
+	EventSetupError    WaitEventStatus = "SetupError"    // there was an error during setup
+	EventTeardownError WaitEventStatus = "TeardownError" // there was an error during teardown
+)
+
+type WaitEvent struct {
+	Req    CallbackRequest
+	Status string
+	Error  string
+}
 
 type State struct {
 	ID       string         // id of workflow instance
@@ -27,10 +40,10 @@ type Thread struct {
 	Name        string
 	Status      ThreadStatus // current status
 	CurStep     string       // current step of the workflow
-	ExecRetries int
-	ExecError   string
-	ExecBackoff time.Time
-	WaitEvents  []string // events workflow is waiting for. Valid only if Status = Waiting, otherwise should be empty.
+	ExecRetries int          // TODO: better retries approach
+	ExecError   string       // TODO: better retries approach
+	ExecBackoff time.Time    // TODO: better retries approach
+	WaitEvents  []WaitEvent  // events workflow is waiting for. Valid only if Status = Waiting, otherwise should be empty.
 	PC          int
 }
 
@@ -88,47 +101,35 @@ type DB interface {
 	RunLocked(ctx context.Context, id string, f UpdaterFunc) error
 }
 
-type TaskMgr interface {
-	SetResume(ctx context.Context, r ResumeRequest) error
-	SetTimeout(ctx context.Context, d time.Duration, r CallbackRequest) error
+// Resumer makes sure that workflow will be resumed:
+// - after workflow was created
+// - after callback was handled
+// - after previous resume didn't fully finish
+// - after any failures during processing
+type Resumer interface {
+	// ScheduleResume should schedule workflow for resume.
+	// After that it should try to resume workflow multiple times until it succeeds
+	// To make sure there there are no zombie workflows in DB, ScheduleResume can be called:
+	// - before workflow was added to DB
+	// - before new workflow state was saved to DB
+	// That's why errors can happen during Resume() calls and they should be retried.
+	// You'd probably want to log them and monitor workflows that are stuck in certain states.
+	ScheduleResume(r *Runner, id string) error
 }
 
 type Runner struct {
-	Workflows map[string]Workflow
-	DB        DB
-	TaskMgr   TaskMgr
+	Workflows        map[string]Workflow
+	CallbackManagers map[string]CallbackManager
+	Resumer          Resumer
+	DB               DB
 }
 
-func (r *Runner) ScheduleTimeoutTasks(ctx context.Context, s *State, t *Thread) error {
-	if s.Status != WorkflowRunning { // workflow finished, no event scheduling is needed
-		return nil
-	}
-	if t.Status == ThreadWaiting {
-		for _, evt := range t.WaitEvents {
-			if !strings.HasPrefix(evt, "_timeout_") {
-				log.Print("skipping non timeout ", evt, " ")
-				continue
-			}
-			seconds, err := strconv.Atoi(strings.TrimPrefix(evt, "_timeout_"))
-			if err != nil {
-				log.Printf("wtf parse: %v", err)
-				continue
-			}
-			err = r.TaskMgr.SetTimeout(ctx, time.Second*time.Duration(seconds), CallbackRequest{
-				WorkflowID: s.ID,
-				ThreadID:   t.ID,
-				Callback:   evt,
-				PC:         t.PC, // todo: make sure PC is the same when we change something
-			})
-			if err != nil {
-				return err
-			}
-		}
-	}
-	return nil
+type CallbackManager interface {
+	Setup(req CallbackRequest) error
+	Teardown(req CallbackRequest) error
 }
 
-var ErrDuplicate = fmt.Errorf("PC doesn't match (duplicate/out of time event)")
+var ErrPCMismatch = fmt.Errorf("PC doesn't match (callback is late)")
 
 // Resume state with specified thread. Thread can be resumed in following cases:
 // 1. Thread just started
@@ -173,9 +174,6 @@ func (r *Runner) ResumeState(ctx *ResumeContext) (WorkflowState, error) {
 	if stop == nil && !ctx.Running {
 		return state, fmt.Errorf("callback not found: %v", ctx)
 	}
-	ctx.t.WaitEvents = []string{}
-	//ctx.t.Receive = nil
-	//ctx.t.Send = nil
 
 	// workflow finished
 	// Workflow definition should always explicitly return result.
@@ -209,74 +207,22 @@ func (r *Runner) ResumeState(ctx *ResumeContext) (WorkflowState, error) {
 	// blocked on select
 	ctx.t.CurStep = stop.Select.Name
 	for _, c := range stop.Select.Cases {
-		ctx.t.WaitEvents = append(ctx.t.WaitEvents, c.CallbackName)
+		c.Callback.PC = ctx.t.PC
+		c.Callback.WorkflowID = ctx.s.ID
+		c.Callback.ThreadID = ctx.t.ID
+		ctx.t.WaitEvents = append(ctx.t.WaitEvents, WaitEvent{Req: c.Callback, Status: "Pending"})
 	}
 	ctx.t.Status = "Waiting"
 	return state, nil
 }
 
-func (r *Runner) ExecStep(s *State, req ResumeRequest) error {
-	if s.Status != WorkflowRunning {
-		return fmt.Errorf("unexpected status for state: %v", s.Status)
-	}
-	t, ok := s.Threads.Find(req.ThreadID)
-	if !ok {
-		return fmt.Errorf("thread not found: %v", req.ThreadID)
-	}
-	if t.Status != ThreadExecuting && t.Status != ThreadPaused {
-		return fmt.Errorf("unexpected status for state: %v", s.Status)
-	}
-	wf, ok := r.Workflows[s.Workflow]
-	if !ok {
-		return fmt.Errorf("workflow not found: %v", s.Workflow)
-	}
-	state := wf()
-	di, err := json.Marshal(s.State)
-	if err != nil {
-		return fmt.Errorf("err marshal/unmarshal state")
-	}
-	err = json.Unmarshal(di, &state)
-	if err != nil {
-		return fmt.Errorf("state unmarshal err: %v", err)
-	}
-	step, ok := FindStep(t.CurStep, state.Definition()).(StmtStep)
-	if !ok {
-		return fmt.Errorf("can't find step %v", t.CurStep)
-	}
-	t.PC++
-	s.PC++
-	res := step.Action()
-	if res.Success {
-		t.Status = "Resuming"
-		t.ExecError = ""
-		t.ExecRetries = 0
-		t.ExecBackoff = time.Time{}
-		s.State = state
-		return nil
-	}
-	if t.ExecRetries < res.Retries { // retries available
-		t.ExecError = res.Error
-		t.ExecRetries++
-		t.ExecBackoff = time.Now().Add(res.RetryInterval)
-		return nil // don't dump state, because step errored
-	}
-	t.Status = "Paused"
-	return nil // don't dump state, because step errored
-}
-
-type ResumeRequest struct {
-	WorkflowID string
-	ThreadID   string
-	PC         int
-
-	Callback string
-}
-
 type CallbackRequest struct {
+	Type       string
 	WorkflowID string
 	ThreadID   string
-	Callback   string
+	Name       string
 	PC         int
+	Data       json.RawMessage
 }
 
 func (r *Runner) NewWorkflow(ctx context.Context, id, name string, state interface{}) error {
@@ -291,23 +237,18 @@ func (r *Runner) NewWorkflow(ctx context.Context, id, name string, state interfa
 				ID:         "_main_",
 				Name:       "_main_",
 				Status:     ThreadResuming,
-				WaitEvents: []string{},
+				WaitEvents: []WaitEvent{},
 			},
 		},
 	}
-	err := r.TaskMgr.SetResume(ctx, ResumeRequest{
-		WorkflowID: s.ID,
-		ThreadID:   "_main_",
-		PC:         s.PC,
-	})
+	err := r.Resumer.ScheduleResume(r, id)
 	if err != nil {
-		panic(err)
+		return err
 	}
-	err = r.DB.Create(ctx, id, s)
-	return err
+	return r.DB.Create(ctx, id, s)
 }
 
-func (r *Runner) Resume(ctx context.Context, s *State) (found bool, err error) {
+func (r *Runner) resume(ctx context.Context, s *State) (found bool, err error) {
 	for _, t := range s.Threads {
 		switch t.Status {
 		case ThreadExecuting:
@@ -344,7 +285,7 @@ func (r *Runner) Resume(ctx context.Context, s *State) (found bool, err error) {
 				t.Status = "Paused"
 			}
 			s.State = state
-			return true, r.ScheduleTimeoutTasks(ctx, s, t)
+			return true, nil //r.ScheduleTimeoutTasks(ctx, s, t)
 		case ThreadResuming:
 			rCtx := &ResumeContext{
 				s: s,
@@ -352,14 +293,14 @@ func (r *Runner) Resume(ctx context.Context, s *State) (found bool, err error) {
 				//CallbackName: resReq.Callback,
 				Running: false,
 			}
+			t.PC++
+			s.PC++
 			state, err := r.ResumeState(rCtx)
 			if err != nil {
 				return true, err
 			}
-			t.PC++
-			s.PC++
 			s.State = state
-			return true, r.ScheduleTimeoutTasks(ctx, s, t)
+			return true, nil //r.ScheduleTimeoutTasks(ctx, s, t)
 		case ThreadWaiting:
 			// ignore callbacks
 			continue
@@ -371,22 +312,50 @@ func (r *Runner) Resume(ctx context.Context, s *State) (found bool, err error) {
 	return false, nil
 }
 
-func (t *Thread) WaitingForCallback(cb string) bool {
+func (t *Thread) WaitingForCallback(cb CallbackRequest) bool {
 	for _, evt := range t.WaitEvents {
-		if evt == cb {
+		if evt.Req.Name == cb.Name && evt.Status == "Setup" {
 			return true
 		}
 	}
 	return false
 }
 
-func (r *Runner) OnResume(ctx context.Context, req ResumeRequest) error {
-	return r.DB.RunLocked(ctx, req.WorkflowID, func(ctx context.Context, s *State, save func() error) error {
+func (r *Runner) Resume(ctx context.Context, dur time.Duration, steps int, id string) error {
+	start := time.Now()
+	return r.DB.RunLocked(ctx, id, func(ctx context.Context, s *State, save func() error) error {
 		if s.Status == WorkflowFinished {
-			return fmt.Errorf("workflow has finished")
+			log.Printf("workflow has finished, skipping resume")
+			return nil
 		}
-		for i := 0; i < 1000 && s.Status == WorkflowRunning; i++ {
-			found, err := r.Resume(ctx, s)
+
+		// before resuming workflow - make sure all previous teardowns are executed
+		for _, t := range s.Threads {
+			for i := 0; i < len(t.WaitEvents); i++ {
+				if t.WaitEvents[i].Status != "Setup" {
+					continue
+				}
+				mgr, ok := r.CallbackManagers[t.WaitEvents[i].Req.Type]
+				if !ok {
+					t.WaitEvents[i].Status = "TeardownError"
+					t.WaitEvents[i].Error = fmt.Sprintf("callback manager not found: %v", t.WaitEvents[i].Req.Type)
+					save()
+					continue
+				}
+				err := mgr.Teardown(t.WaitEvents[i].Req)
+				if err != nil {
+					t.WaitEvents[i].Status = "TeardownError"
+					t.WaitEvents[i].Error = err.Error()
+					save()
+					continue
+				}
+				t.WaitEvents = append(t.WaitEvents[:i], t.WaitEvents[i+1:]...) // remove successful teardown
+				save()
+			}
+		}
+
+		for i := 0; i < steps && s.Status == WorkflowRunning; i++ {
+			found, err := r.resume(ctx, s)
 			if err != nil {
 				return fmt.Errorf("err during resume: %v", err)
 			}
@@ -397,25 +366,67 @@ func (r *Runner) OnResume(ctx context.Context, req ResumeRequest) error {
 			if err != nil {
 				return err
 			}
+
+			// we are running for long time, let's schedule another resume
+			if time.Since(start) > dur/2 {
+				err := r.Resumer.ScheduleResume(r, id)
+				if err != nil {
+					return err
+				}
+				return nil
+			}
+		}
+
+		if s.Status == WorkflowRunning { // in case process didn't resume on X steps - schedule another one
+			// TODO: stop process with LOOP error
+		}
+
+		// after resume is blocked - setup callbacks
+		for _, t := range s.Threads {
+			for i := 0; i < len(t.WaitEvents); i++ {
+				if t.WaitEvents[i].Status != "Pending" {
+					continue
+				}
+				mgr, ok := r.CallbackManagers[t.WaitEvents[i].Req.Type]
+				if !ok {
+					t.WaitEvents[i].Status = "SetupError"
+					t.WaitEvents[i].Error = fmt.Sprintf("callback manager not found: %v", t.WaitEvents[i].Req.Type)
+					save()
+					continue
+				}
+				err := mgr.Setup(t.WaitEvents[i].Req)
+				if err != nil {
+					t.WaitEvents[i].Status = "SetupError"
+					t.WaitEvents[i].Error = err.Error()
+					save()
+					continue
+				}
+				t.WaitEvents[i].Status = "Setup"
+				save()
+			}
 		}
 		return nil
 	})
 }
 
 func (r *Runner) OnCallback(ctx context.Context, req CallbackRequest) error {
+	log.Printf("On callback: %v", req)
 	return r.DB.RunLocked(ctx, req.WorkflowID, func(ctx context.Context, s *State, save func() error) error {
 		t, ok := s.Threads.Find(req.ThreadID)
 		if !ok {
 			return fmt.Errorf("thread %v not found", req.ThreadID)
 		}
-		if !t.WaitingForCallback(req.Callback) {
+		if req.PC != t.PC {
+			return fmt.Errorf("callback PC mismatch: got %v, expected %v : request: %v ", req, req.PC, t.PC)
+		}
+		if !t.WaitingForCallback(req) {
 			return fmt.Errorf("thread is not waiting for callback: %v", req.ThreadID)
 		}
 		rCtx := &ResumeContext{
-			s:            s,
-			t:            t,
-			CallbackName: req.Callback,
-			Running:      false,
+			s:        s,
+			t:        t,
+			Callback: req,
+			Running:  false,
 		}
 		state, err := r.ResumeState(rCtx)
 		if err != nil {
@@ -424,13 +435,7 @@ func (r *Runner) OnCallback(ctx context.Context, req CallbackRequest) error {
 		t.PC++
 		s.PC++
 		s.State = state
-		err = r.ScheduleTimeoutTasks(ctx, s, t)
-		if err != nil {
-			return err
-		}
-		err = r.TaskMgr.SetResume(ctx, ResumeRequest{
-			WorkflowID: s.ID,
-		})
+		err = r.Resumer.ScheduleResume(r, req.WorkflowID)
 		if err != nil {
 			return err
 		}
