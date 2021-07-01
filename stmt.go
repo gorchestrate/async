@@ -83,7 +83,7 @@ type ActionResult struct {
 	RetryInterval time.Duration
 }
 
-type ActionFunc func() ActionResult
+type ActionFunc func() error
 
 type StmtStep struct {
 	Name   string

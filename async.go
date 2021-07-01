@@ -107,14 +107,14 @@ type DB interface {
 // - after previous resume didn't fully finish
 // - after any failures during processing
 type Resumer interface {
-	// ScheduleResume should schedule workflow for resume.
+	// ScheduleExecution should schedule workflow for resume.
 	// After that it should try to resume workflow multiple times until it succeeds
-	// To make sure there there are no zombie workflows in DB, ScheduleResume can be called:
+	// To make sure there there are no zombie workflows in DB, ScheduleExecution can be called:
 	// - before workflow was added to DB
 	// - before new workflow state was saved to DB
 	// That's why errors can happen during Resume() calls and they should be retried.
 	// You'd probably want to log them and monitor workflows that are stuck in certain states.
-	ScheduleResume(r *Runner, id string) error
+	ScheduleExecution(r *Runner, id string) error
 }
 
 type Runner struct {
@@ -241,7 +241,7 @@ func (r *Runner) NewWorkflow(ctx context.Context, id, name string, state interfa
 			},
 		},
 	}
-	err := r.Resumer.ScheduleResume(r, id)
+	err := r.Resumer.ScheduleExecution(r, id)
 	if err != nil {
 		return err
 	}
@@ -272,15 +272,11 @@ func (r *Runner) resume(ctx context.Context, s *State) (found bool, err error) {
 			t.PC++
 			s.PC++
 			res := step.Action()
-			if res.Success {
+			if res != nil { // TODO: more sophisticated error handling with retries and recovery
 				t.Status = "Resuming"
 				t.ExecError = ""
 				t.ExecRetries = 0
 				t.ExecBackoff = time.Time{}
-			} else if t.ExecRetries < res.Retries { // retries available
-				t.ExecError = res.Error
-				t.ExecRetries++
-				t.ExecBackoff = time.Now().Add(res.RetryInterval)
 			} else {
 				t.Status = "Paused"
 			}
@@ -321,7 +317,7 @@ func (t *Thread) WaitingForCallback(cb CallbackRequest) bool {
 	return false
 }
 
-func (r *Runner) Resume(ctx context.Context, dur time.Duration, steps int, id string) error {
+func (r *Runner) Execute(ctx context.Context, dur time.Duration, steps int, id string) error {
 	start := time.Now()
 	return r.DB.RunLocked(ctx, id, func(ctx context.Context, s *State, save func() error) error {
 		if s.Status == WorkflowFinished {
@@ -369,7 +365,7 @@ func (r *Runner) Resume(ctx context.Context, dur time.Duration, steps int, id st
 
 			// we are running for long time, let's schedule another resume
 			if time.Since(start) > dur/2 {
-				err := r.Resumer.ScheduleResume(r, id)
+				err := r.Resumer.ScheduleExecution(r, id)
 				if err != nil {
 					return err
 				}
@@ -435,7 +431,7 @@ func (r *Runner) OnCallback(ctx context.Context, req CallbackRequest) error {
 		t.PC++
 		s.PC++
 		s.State = state
-		err = r.Resumer.ScheduleResume(r, req.WorkflowID)
+		err = r.Resumer.ScheduleExecution(r, req.WorkflowID)
 		if err != nil {
 			return err
 		}
