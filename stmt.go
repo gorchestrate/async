@@ -31,17 +31,15 @@ type ResumeContext struct {
 	CallbackInput  interface{}
 	CallbackOutput interface{}
 
-	Return interface{}
-
-	// Used for loop management
-	Break bool
+	Return bool
+	Break  bool
 }
 
 // Stop tells us that syncronous part of the workflow has finished. It means we either:
 type Stop struct {
 	Step   string      // waiting for step execution to complete
 	Select *SelectStmt // waiting for event
-	Return interface{} // returning from process
+	Return bool        // returning from process
 }
 
 // Section is similar to code block {} with a list of statements.
@@ -318,20 +316,15 @@ func Break() BreakStmt {
 }
 
 type ReturnStmt struct {
-	Value interface{}
 }
 
 func (s ReturnStmt) Resume(ctx *ResumeContext) (*Stop, error) {
-	return &Stop{
-		Return: s.Value,
-	}, nil
+	return &Stop{}, nil
 }
 
 // Finish workflow and return result
-func Return(v interface{}) ReturnStmt {
-	return ReturnStmt{
-		Value: v,
-	}
+func Return() ReturnStmt {
+	return ReturnStmt{}
 }
 
 type GoStmt struct {

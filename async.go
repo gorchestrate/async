@@ -133,15 +133,14 @@ func (r *Runner) ResumeState(ctx *ResumeContext, state WorkflowState) error {
 	// workflow finished
 	// Workflow definition should always explicitly return result.
 	// You should only be allowed to return from main thread
-	if stop != nil && stop.Return != nil && ctx.t.ID == "_main_" {
+	if stop != nil && stop.Return && ctx.t.ID == "_main_" {
 		log.Printf("MAIN THREAD FINISHED!!!")
 		ctx.s.Status = "Finished"
-		ctx.Return = stop.Return
 		return nil
 	}
 
 	// thread returned
-	if stop != nil && stop.Return != nil {
+	if stop != nil && stop.Return {
 		ctx.s.Threads.Remove(ctx.t.ID)
 		return nil
 	}
