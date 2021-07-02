@@ -1,14 +1,10 @@
 package async
 
 import (
-	"encoding/json"
 	"fmt"
 	"reflect"
 	"time"
 )
-
-// Workflow defines how we create/resume our workflow state.
-type Workflow func() WorkflowState
 
 // WorkflowState should be a Go struct supporting JSON unmarshalling into it.
 // When process is resumed - current state is unmarshalled into it and then Definition() is called.
@@ -32,8 +28,10 @@ type ResumeContext struct {
 
 	// In case workflow is resumed by a callback
 	Callback       CallbackRequest
-	CallbackInput  json.RawMessage
-	CallbackOutput json.RawMessage
+	CallbackInput  interface{}
+	CallbackOutput interface{}
+
+	Return interface{}
 
 	// Used for loop management
 	Break bool
@@ -283,9 +281,8 @@ func (s SelectStmt) Resume(ctx *ResumeContext) (*Stop, error) {
 }
 
 type Handler interface {
-	Type() string                                                               // used to identify proper CallbackManager
-	Marshal() json.RawMessage                                                   // data passed to CallbackManager
-	Handle(req CallbackRequest, input json.RawMessage) (json.RawMessage, error) // called when
+	Type() string
+	Handle(req CallbackRequest, input interface{}) (interface{}, error)
 }
 
 type WaitCond struct {
@@ -298,9 +295,9 @@ type WaitCond struct {
 func On(event string, handler Handler, stmts ...Stmt) WaitCond {
 	return WaitCond{
 		Callback: CallbackRequest{
-			Type: handler.Type(),
-			Name: event,
-			Data: handler.Marshal(),
+			Type:    handler.Type(),
+			Name:    event,
+			Handler: handler,
 		},
 		Stmt:    Section(stmts),
 		Handler: handler,
