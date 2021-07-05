@@ -89,8 +89,6 @@ const (
 	ThreadPaused    ThreadStatus = "Paused"
 )
 
-type UpdaterFunc func(ctx context.Context, wf WorkflowState, s *State, save func(bool) error) error
-
 type Runner struct {
 	CallbackManagers map[string]CallbackManager
 }
@@ -99,8 +97,6 @@ type CallbackManager interface {
 	Setup(req CallbackRequest) error
 	Teardown(req CallbackRequest) error
 }
-
-var ErrPCMismatch = fmt.Errorf("PC doesn't match (callback is late)")
 
 // Resume state with specified thread. Thread can be resumed in following cases:
 // 1. Thread just started

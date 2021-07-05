@@ -234,6 +234,7 @@ func Wait(name string, ss ...WaitCond) SelectStmt {
 	}
 }
 
+// safe resume for statement that may be nil
 func nResume(ctx *ResumeContext, s Stmt) (*Stop, error) {
 	if s == nil {
 		return nil, nil
