@@ -1,6 +1,6 @@
 ### Gorchestrate your workflows! 
 
-**async** is a Go library to integrate workflow management into your application using your existing infrastructure.
+**async** is a Go library to integrate workflow management into your application using **your existing infrastructure**.
 
 I've spend 4 years to come up with this particular approach, and i'll apreciate if you'll try it out.
 
@@ -66,44 +66,42 @@ func (s *MyWorkflowState) Finish(output string) async.Stmt{
 }
 ```
 
-#### This is a library, not a framework
-
-
-* Store workflows in DB of **your** choice
-* Schedule workflows using **your** approach
-* Handle callbacks with API **you** create
-
-#### It has some really good features 
-* Update workflow definitions **while they are running**. If hotfix needed - you can deploy new version without having to restart workflows.
-* Define all your workflow actions **right in the Go code**. No need for boring workflow<>action separation boilerplates.
-* Run multiple goroutines(threads) in your workflow. No need to create multiple workflows to do parallel tasks.
-
-#### Extensible
-* Add **your** workflow routines and reuse them:  Approvals, Timers, Exporting, Logging, Notifications, Verifications... 
-* Add **your** wait conditions:  Wait for user input, Wait for approval, Wait for timeout, Wait for task finished...
-* You can share implementation for common routines and conditions. This can help create a repository of async libraries.
-
+#### Features
+* You can run this on serverless
+* You can define all your workflow actions **right in the Go code**
+* You can update workflow **while it is running** 
+* Full control of how your workflows are handled
 
 ## Architecture
-Gorchestrate was created with Serverless in mind. Specifically Google Cloud Run & Google Cloud Tasks. This allows to build fully serverless workflow management system that costs nothing when you start and scales well when you have more load.
+Gorchestrate was created with being stateless in mind. This allows framework to be adaptable to any infrastructure, including Serverless applications.
 
-No need to monitor servers & scale your cluster. You pay only for what you use.
-    
-All actions on workflow are stateless, so no monitoring loop exists in the library - you call all workflow actions explicitly.
+Workflow is resumed(executed) by following events:
+1. Explicit call of OnCallback() method. It's called whenever you want it to, for example when custom event happens.
+2. Scheduled call of OnResume() method. We schedule such after OnCallback() method and after workflow creation.
 
-To resume workflow when needed (timeout/event) - external scheduler should be used to continue workflow execution when it's needed and retry failed executions (due to bugs, connectivity or locking issues). This will make your workflows reliable.
+* OnResume() will continue workflow till point when it's waiting for events. 
+* Then we execute Setup() for all events we are waiting for
+* Then we handle event via OnCallback() method
+* Then we execute Teardown() for all eents we were waiting for previously
+* Then we continue the workflow... (back to beginning)
 
-External scheduler can also be serverless, for example you can use Google Cloud Tasks or similar scheduling service to call your public API to resume workflow execution when needed.
+OnCallback() will execute callback handler for the workflow and schedule OnResume() call to continue the workflow using flow above. 
 
+By using external Scheduler(for ex. Google Cloud Run) it's possible to have fully serverless workflows.
+This avoids infrastructure burden of monitoring and setting up servers and at the same time solves common issues related to serverless applications.
+
+* No need to monitor servers & scale your cluster. 
+* No need for singleton patterns to avoid concurrency issues.
+* No need for cron or similar schedulers. Just create workflow with a loop.
 
 ### Is it production ready?
-Not at this stage. API may change and there are definitely some bugs that has to be fixed.
+Not yet.
+
+API may change and there are definitely some bugs that has to be fixed.
 
 I'd be glad if some really smart guy will help me out to make this library better. 
 
 Feedback is welcome!
-
-
 
 ### Tips
 
