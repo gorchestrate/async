@@ -94,8 +94,19 @@ type Runner struct {
 }
 
 type CallbackManager interface {
-	Setup(req CallbackRequest) error
-	Teardown(req CallbackRequest) error
+	Setup(ctx context.Context, req CallbackRequest) error
+	Teardown(ctx context.Context, req CallbackRequest) error
+}
+
+type EventLookupFunc func(s *State) (CallbackRequest, error)
+
+type Engine interface {
+	OnResume(ctx context.Context, id string) error
+	OnCallback(ctx context.Context, lkp EventLookupFunc, input interface{}) (interface{}, error)
+}
+
+type Scheduler interface {
+	Schedule(ctx context.Context, id string) error
 }
 
 // Resume state with specified thread. Thread can be resumed in following cases:
@@ -172,7 +183,7 @@ type CallbackRequest struct {
 	ThreadID   string
 	Name       string
 	PC         int
-	Handler    interface{}
+	Handler    interface{} `json:"-"`
 }
 
 func NewState(id, name string) State {
@@ -259,19 +270,21 @@ func (r *Runner) OnResume(ctx context.Context, wf WorkflowState, s *State, save 
 			if t.WaitEvents[i].Status != "Setup" {
 				continue
 			}
-			mgr, ok := r.CallbackManagers[t.WaitEvents[i].Req.Type]
-			if !ok {
-				t.WaitEvents[i].Status = "TeardownError"
-				t.WaitEvents[i].Error = fmt.Sprintf("callback manager not found: %v", t.WaitEvents[i].Req.Type)
-				save(false)
-				continue
-			}
-			err := mgr.Teardown(t.WaitEvents[i].Req)
-			if err != nil {
-				t.WaitEvents[i].Status = "TeardownError"
-				t.WaitEvents[i].Error = err.Error()
-				save(false)
-				continue
+			if t.WaitEvents[i].Req.Type != "" { // some handlers may not need setup/teardown
+				mgr, ok := r.CallbackManagers[t.WaitEvents[i].Req.Type]
+				if !ok {
+					t.WaitEvents[i].Status = "TeardownError"
+					t.WaitEvents[i].Error = fmt.Sprintf("callback manager not found: %v", t.WaitEvents[i].Req.Type)
+					save(false)
+					continue
+				}
+				err := mgr.Teardown(ctx, t.WaitEvents[i].Req)
+				if err != nil {
+					t.WaitEvents[i].Status = "TeardownError"
+					t.WaitEvents[i].Error = err.Error()
+					save(false)
+					continue
+				}
 			}
 			t.WaitEvents = append(t.WaitEvents[:i], t.WaitEvents[i+1:]...) // remove successful teardown
 			save(false)
@@ -302,19 +315,21 @@ func (r *Runner) OnResume(ctx context.Context, wf WorkflowState, s *State, save 
 			if t.WaitEvents[i].Status != "Pending" {
 				continue
 			}
-			mgr, ok := r.CallbackManagers[t.WaitEvents[i].Req.Type]
-			if !ok {
-				t.WaitEvents[i].Status = "SetupError"
-				t.WaitEvents[i].Error = fmt.Sprintf("callback manager not found: %v", t.WaitEvents[i].Req.Type)
-				save(false)
-				continue
-			}
-			err := mgr.Setup(t.WaitEvents[i].Req)
-			if err != nil {
-				t.WaitEvents[i].Status = "SetupError"
-				t.WaitEvents[i].Error = err.Error()
-				save(false)
-				continue
+			if t.WaitEvents[i].Req.Type != "" { // some handlers may not need setup/teardown
+				mgr, ok := r.CallbackManagers[t.WaitEvents[i].Req.Type]
+				if !ok {
+					t.WaitEvents[i].Status = "SetupError"
+					t.WaitEvents[i].Error = fmt.Sprintf("callback manager not found: %v", t.WaitEvents[i].Req.Type)
+					save(false)
+					continue
+				}
+				err := mgr.Setup(ctx, t.WaitEvents[i].Req)
+				if err != nil {
+					t.WaitEvents[i].Status = "SetupError"
+					t.WaitEvents[i].Error = err.Error()
+					save(false)
+					continue
+				}
 			}
 			t.WaitEvents[i].Status = "Setup"
 			save(false)
