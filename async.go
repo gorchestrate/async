@@ -98,17 +98,6 @@ type CallbackManager interface {
 	Teardown(ctx context.Context, req CallbackRequest) error
 }
 
-type EventLookupFunc func(s *State) (CallbackRequest, error)
-
-type Engine interface {
-	OnResume(ctx context.Context, id string) error
-	OnCallback(ctx context.Context, id string, lkp EventLookupFunc, input interface{}) (interface{}, error)
-}
-
-type Scheduler interface {
-	Schedule(ctx context.Context, id string) error
-}
-
 // Resume state with specified thread. Thread can be resumed in following cases:
 // 1. Thread just started
 // 2. Thread timed out - unblocked on time select
