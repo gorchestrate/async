@@ -1,6 +1,7 @@
 package async
 
 import (
+	"context"
 	"fmt"
 	"reflect"
 	"time"
@@ -19,8 +20,9 @@ type WorkflowState interface {
 // ResumeContext is used during workflow execution
 // It contains resume input as well as current state of the execution.
 type ResumeContext struct {
-	s *State
-	t *Thread // current thread to resume
+	ctx context.Context
+	s   *State
+	t   *Thread // current thread to resume
 
 	// Running means process is already resumed and we are executing statements.
 	// process is not running - we are searching for the step we should resume from.
@@ -254,7 +256,7 @@ func (s SelectStmt) Resume(ctx *ResumeContext) (*Stop, error) {
 		for _, c := range s.Cases {
 			if c.Callback.Name == ctx.Callback.Name {
 				if c.Handler != nil { // Execute syncronous handler in place
-					out, err := c.Handler.Handle(ctx.Callback, ctx.CallbackInput)
+					out, err := c.Handler.Handle(ctx.ctx, ctx.Callback, ctx.CallbackInput)
 					if err != nil {
 						return nil, err
 					}
@@ -281,7 +283,7 @@ func (s SelectStmt) Resume(ctx *ResumeContext) (*Stop, error) {
 
 type Handler interface {
 	Type() string
-	Handle(req CallbackRequest, input interface{}) (interface{}, error)
+	Handle(ctx context.Context, req CallbackRequest, input interface{}) (interface{}, error)
 }
 
 type WaitCond struct {

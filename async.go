@@ -224,8 +224,9 @@ func (r *Runner) resume(ctx context.Context, state WorkflowState, s *State) (fou
 			return true, nil //r.ScheduleTimeoutTasks(ctx, s, t)
 		case ThreadResuming:
 			rCtx := &ResumeContext{
-				s: s,
-				t: t,
+				ctx: ctx,
+				s:   s,
+				t:   t,
 				//CallbackName: resReq.Callback,
 				Running: false,
 			}
@@ -350,6 +351,7 @@ func (r *Runner) OnCallback(ctx context.Context, req CallbackRequest, wf Workflo
 		return nil, fmt.Errorf("thread is not waiting for callback: %v", req.ThreadID)
 	}
 	rCtx := &ResumeContext{
+		ctx:           ctx,
 		s:             s,
 		t:             t,
 		Callback:      req,

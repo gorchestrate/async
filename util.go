@@ -7,7 +7,6 @@ import (
 )
 
 type JsonEvent struct {
-	Path    string
 	Handler interface{}
 }
 
