@@ -1,6 +1,7 @@
 package async
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -14,7 +15,7 @@ func (h JsonEvent) Type() string {
 	return ""
 }
 
-func (h JsonEvent) Handle(req CallbackRequest, input interface{}) (interface{}, error) {
+func (h JsonEvent) Handle(ctx context.Context, req CallbackRequest, input interface{}) (interface{}, error) {
 	fv := reflect.ValueOf(h.Handler)
 	ft := fv.Type()
 
