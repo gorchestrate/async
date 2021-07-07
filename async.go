@@ -98,11 +98,11 @@ type CallbackManager interface {
 	Teardown(ctx context.Context, req CallbackRequest) error
 }
 
-type EventLookupFunc func(s *State) (CallbackRequest, error)
+type EventLookupFunc func(s *State) (*CallbackRequest, error)
 
 type Engine interface {
 	OnResume(ctx context.Context, id string) error
-	OnCallback(ctx context.Context, lkp EventLookupFunc, input interface{}) (interface{}, error)
+	OnCallback(ctx context.Context, id string, lkp EventLookupFunc, input interface{}) (interface{}, error)
 }
 
 type Scheduler interface {
