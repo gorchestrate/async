@@ -284,6 +284,8 @@ func (s SelectStmt) Resume(ctx *ResumeContext) (*Stop, error) {
 type Handler interface {
 	Type() string
 	Handle(ctx context.Context, req CallbackRequest, input interface{}) (interface{}, error)
+	Setup(ctx context.Context, req CallbackRequest) error
+	Teardown(ctx context.Context, req CallbackRequest) error
 }
 
 type WaitCond struct {
@@ -416,4 +418,21 @@ func Walk(s Stmt, f func(s Stmt) bool) bool {
 		panic(fmt.Sprintf("unknown statement: %v", reflect.TypeOf(s)))
 	}
 	return false
+}
+
+func FindHandler(req CallbackRequest, sec Stmt) Handler {
+	var ret Handler
+	Walk(sec, func(s Stmt) bool {
+		switch x := s.(type) {
+		case SelectStmt:
+			for _, v := range x.Cases {
+				if v.Callback.Name == req.Name {
+					ret = v.Handler
+					return true
+				}
+			}
+		}
+		return false
+	})
+	return ret
 }

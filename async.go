@@ -90,12 +90,6 @@ const (
 )
 
 type Runner struct {
-	CallbackManagers map[string]CallbackManager
-}
-
-type CallbackManager interface {
-	Setup(ctx context.Context, req CallbackRequest) error
-	Teardown(ctx context.Context, req CallbackRequest) error
 }
 
 // Resume state with specified thread. Thread can be resumed in following cases:
@@ -254,27 +248,26 @@ func (r *Runner) OnResume(ctx context.Context, wf WorkflowState, s *State, save 
 		return nil
 	}
 
-	// before resuming workflow - make sure all previous teardowns are executed
+	//before resuming workflow - make sure all previous teardowns are executed
 	for _, t := range s.Threads {
 		for i := 0; i < len(t.WaitEvents); i++ {
 			if t.WaitEvents[i].Status != "Setup" {
 				continue
 			}
-			if t.WaitEvents[i].Req.Type != "" { // some handlers may not need setup/teardown
-				mgr, ok := r.CallbackManagers[t.WaitEvents[i].Req.Type]
-				if !ok {
-					t.WaitEvents[i].Status = "TeardownError"
-					t.WaitEvents[i].Error = fmt.Sprintf("callback manager not found: %v", t.WaitEvents[i].Req.Type)
-					save(false)
-					continue
-				}
-				err := mgr.Teardown(ctx, t.WaitEvents[i].Req)
-				if err != nil {
-					t.WaitEvents[i].Status = "TeardownError"
-					t.WaitEvents[i].Error = err.Error()
-					save(false)
-					continue
-				}
+			h := FindHandler(t.WaitEvents[i].Req, wf.Definition())
+			if h == nil {
+				t.WaitEvents[i].Status = "TeardownError"
+				t.WaitEvents[i].Error = fmt.Sprintf("callback handler not found: %v", t.WaitEvents[i].Req.Type)
+				save(false)
+				continue
+			}
+			// TODO: marshal/unmarshal event handlers???
+			err := h.Teardown(ctx, t.WaitEvents[i].Req)
+			if err != nil {
+				t.WaitEvents[i].Status = "TeardownError"
+				t.WaitEvents[i].Error = err.Error()
+				save(false)
+				continue
 			}
 			t.WaitEvents = append(t.WaitEvents[:i], t.WaitEvents[i+1:]...) // remove successful teardown
 			save(false)
@@ -305,21 +298,20 @@ func (r *Runner) OnResume(ctx context.Context, wf WorkflowState, s *State, save 
 			if t.WaitEvents[i].Status != "Pending" {
 				continue
 			}
-			if t.WaitEvents[i].Req.Type != "" { // some handlers may not need setup/teardown
-				mgr, ok := r.CallbackManagers[t.WaitEvents[i].Req.Type]
-				if !ok {
-					t.WaitEvents[i].Status = "SetupError"
-					t.WaitEvents[i].Error = fmt.Sprintf("callback manager not found: %v", t.WaitEvents[i].Req.Type)
-					save(false)
-					continue
-				}
-				err := mgr.Setup(ctx, t.WaitEvents[i].Req)
-				if err != nil {
-					t.WaitEvents[i].Status = "SetupError"
-					t.WaitEvents[i].Error = err.Error()
-					save(false)
-					continue
-				}
+			h := FindHandler(t.WaitEvents[i].Req, wf.Definition())
+			if h == nil {
+				t.WaitEvents[i].Status = "SetupError"
+				t.WaitEvents[i].Error = fmt.Sprintf("callback handler not found: %v", t.WaitEvents[i].Req.Type)
+				save(false)
+				continue
+			}
+			// TODO: marshal/unmarshal event handlers???
+			err := h.Setup(ctx, t.WaitEvents[i].Req)
+			if err != nil {
+				t.WaitEvents[i].Status = "SetupError"
+				t.WaitEvents[i].Error = err.Error()
+				save(false)
+				continue
 			}
 			t.WaitEvents[i].Status = "Setup"
 			save(false)
