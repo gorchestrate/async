@@ -283,9 +283,13 @@ func (s SelectStmt) Resume(ctx *ResumeContext) (*Stop, error) {
 }
 
 type Handler interface {
-	Type() string
-	Handle(ctx context.Context, req CallbackRequest, input interface{}) (interface{}, error)
+	// Setup event
 	Setup(ctx context.Context, req CallbackRequest) (json.RawMessage, error)
+
+	// Handle incoming event
+	Handle(ctx context.Context, req CallbackRequest, input interface{}) (interface{}, error)
+
+	// Teardown event
 	Teardown(ctx context.Context, req CallbackRequest) error
 }
 
@@ -299,7 +303,6 @@ type WaitCond struct {
 func On(event string, handler Handler, stmts ...Stmt) WaitCond {
 	return WaitCond{
 		Callback: CallbackRequest{
-			Type: handler.Type(),
 			Name: event,
 		},
 		Stmt:    Section(stmts),

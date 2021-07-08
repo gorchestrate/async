@@ -162,7 +162,6 @@ func (r *Runner) ResumeState(ctx *ResumeContext, state WorkflowState) error {
 }
 
 type CallbackRequest struct {
-	Type       string
 	WorkflowID string
 	ThreadID   string
 	Name       string
@@ -258,8 +257,11 @@ func (r *Runner) OnResume(ctx context.Context, wf WorkflowState, s *State, save 
 			h := FindHandler(t.WaitEvents[i].Req, wf.Definition())
 			if h == nil {
 				t.WaitEvents[i].Status = "TeardownError"
-				t.WaitEvents[i].Error = fmt.Sprintf("callback handler not found: %v", t.WaitEvents[i].Req.Type)
-				save(false)
+				t.WaitEvents[i].Error = fmt.Sprintf("callback handler not found: %v", t.WaitEvents[i].Req.Name)
+				err := save(false)
+				if err != nil {
+					return err
+				}
 				continue
 			}
 			// TODO: marshal/unmarshal event handlers???
@@ -267,11 +269,17 @@ func (r *Runner) OnResume(ctx context.Context, wf WorkflowState, s *State, save 
 			if err != nil {
 				t.WaitEvents[i].Status = "TeardownError"
 				t.WaitEvents[i].Error = err.Error()
-				save(false)
+				err := save(false)
+				if err != nil {
+					return err
+				}
 				continue
 			}
 			t.WaitEvents = append(t.WaitEvents[:i], t.WaitEvents[i+1:]...) // remove successful teardown
-			save(false)
+			err = save(false)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -289,9 +297,9 @@ func (r *Runner) OnResume(ctx context.Context, wf WorkflowState, s *State, save 
 		}
 	}
 
-	if s.Status == WorkflowRunning { // in case process didn't resume on X steps - schedule another one
-		// TODO: stop process with LOOP error
-	}
+	//if s.Status == WorkflowRunning { // in case process didn't resume on X steps - schedule another one
+	// TODO: stop process with LOOP error
+	//}
 
 	// after resume is blocked - setup callbacks
 	for _, t := range s.Threads {
@@ -302,8 +310,11 @@ func (r *Runner) OnResume(ctx context.Context, wf WorkflowState, s *State, save 
 			h := FindHandler(t.WaitEvents[i].Req, wf.Definition())
 			if h == nil {
 				t.WaitEvents[i].Status = "SetupError"
-				t.WaitEvents[i].Error = fmt.Sprintf("callback handler not found: %v", t.WaitEvents[i].Req.Type)
-				save(false)
+				t.WaitEvents[i].Error = fmt.Sprintf("callback handler not found: %v", t.WaitEvents[i].Req.Name)
+				err := save(false)
+				if err != nil {
+					return err
+				}
 				continue
 			}
 			// TODO: marshal/unmarshal event handlers???
@@ -312,11 +323,17 @@ func (r *Runner) OnResume(ctx context.Context, wf WorkflowState, s *State, save 
 				t.WaitEvents[i].Status = "SetupError"
 				t.WaitEvents[i].Error = err.Error()
 				t.WaitEvents[i].Req.Data = d
-				save(false)
+				err := save(false)
+				if err != nil {
+					return err
+				}
 				continue
 			}
 			t.WaitEvents[i].Status = "Setup"
-			save(false)
+			err = save(false)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	return nil
