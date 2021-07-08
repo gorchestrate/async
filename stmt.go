@@ -2,6 +2,7 @@ package async
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"time"
@@ -284,7 +285,7 @@ func (s SelectStmt) Resume(ctx *ResumeContext) (*Stop, error) {
 type Handler interface {
 	Type() string
 	Handle(ctx context.Context, req CallbackRequest, input interface{}) (interface{}, error)
-	Setup(ctx context.Context, req CallbackRequest) error
+	Setup(ctx context.Context, req CallbackRequest) (json.RawMessage, error)
 	Teardown(ctx context.Context, req CallbackRequest) error
 }
 
@@ -298,9 +299,8 @@ type WaitCond struct {
 func On(event string, handler Handler, stmts ...Stmt) WaitCond {
 	return WaitCond{
 		Callback: CallbackRequest{
-			Type:    handler.Type(),
-			Name:    event,
-			Handler: handler,
+			Type: handler.Type(),
+			Name: event,
 		},
 		Stmt:    Section(stmts),
 		Handler: handler,
