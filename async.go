@@ -2,6 +2,7 @@ package async
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"time"
@@ -166,7 +167,7 @@ type CallbackRequest struct {
 	ThreadID   string
 	Name       string
 	PC         int
-	Handler    interface{} `json:"-"`
+	Data       json.RawMessage
 }
 
 func NewState(id, name string) State {
@@ -306,10 +307,11 @@ func (r *Runner) OnResume(ctx context.Context, wf WorkflowState, s *State, save 
 				continue
 			}
 			// TODO: marshal/unmarshal event handlers???
-			err := h.Setup(ctx, t.WaitEvents[i].Req)
+			d, err := h.Setup(ctx, t.WaitEvents[i].Req)
 			if err != nil {
 				t.WaitEvents[i].Status = "SetupError"
 				t.WaitEvents[i].Error = err.Error()
+				t.WaitEvents[i].Req.Data = d
 				save(false)
 				continue
 			}
