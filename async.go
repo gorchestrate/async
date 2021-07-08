@@ -18,7 +18,7 @@ const (
 
 type WaitEvent struct {
 	Req    CallbackRequest
-	Status string
+	Status WaitEventStatus
 	Error  string
 }
 
@@ -350,4 +350,22 @@ func (r *Runner) OnCallback(ctx context.Context, req CallbackRequest, wf Workflo
 	s.PC++
 	return rCtx.CallbackOutput, save(true)
 
+}
+
+// OnEvent is shortcut for calling OnCallback() by event name.
+// Be careful - if you have events with the same name waiting - you will not have
+// control over which event will be called back. If this is important for you - you should use OnCallback() instead
+func (r *Runner) OnEvent(ctx context.Context, name string, wf WorkflowState, s *State, input interface{}, save Checkpoint) (interface{}, error) {
+	var req CallbackRequest
+	for _, tr := range s.Threads {
+		for _, e := range tr.WaitEvents {
+			if e.Req.Name == name && e.Status == EventPending || e.Status == EventSetup {
+				req = e.Req
+			}
+		}
+	}
+	if req.Name == "" {
+		return nil, fmt.Errorf("Event %v not found", name)
+	}
+	return r.OnCallback(ctx, req, wf, s, input, save)
 }
