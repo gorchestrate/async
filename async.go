@@ -184,10 +184,9 @@ func resumeOnce(ctx context.Context, state WorkflowState, s *State) (found bool,
 			s.PC++
 			err := step.Action()
 			if err != nil {
-				t.Status = ThreadResuming
-			} else {
 				return true, fmt.Errorf("err during step %v execution: %v", t.CurStep, err)
 			}
+			t.Status = ThreadResuming
 			return true, nil
 		case ThreadResuming:
 			rCtx := &ResumeContext{
