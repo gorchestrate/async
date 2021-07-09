@@ -114,6 +114,8 @@ func resumeState(ctx *ResumeContext, state WorkflowState) error {
 	// workflow finished (i.e. main thread finished)
 	if stop != nil && stop.Return && ctx.t.ID == MainThread {
 		ctx.s.Status = WorkflowFinished
+		ctx.t.PC++
+		ctx.s.PC++
 		return nil
 	}
 
@@ -133,12 +135,16 @@ func resumeState(ctx *ResumeContext, state WorkflowState) error {
 	if stop.Step != "" {
 		ctx.t.CurStep = stop.Step
 		ctx.t.Status = ThreadExecuting
+		ctx.t.PC++
+		ctx.s.PC++
 		return nil
 	}
 
 	// blocked on select
 	ctx.t.CurStep = stop.Select.Name
 	for _, c := range stop.Select.Cases {
+		ctx.t.PC++
+		ctx.s.PC++
 		c.Callback.PC = ctx.t.PC
 		c.Callback.WorkflowID = ctx.s.ID
 		c.Callback.ThreadID = ctx.t.ID
@@ -180,8 +186,6 @@ func resumeOnce(ctx context.Context, state WorkflowState, s *State) (found bool,
 			if !ok {
 				return true, fmt.Errorf("can't find step %v", t.CurStep)
 			}
-			t.PC++
-			s.PC++
 			err := step.Action()
 			if err != nil {
 				return true, fmt.Errorf("err during step %v execution: %v", t.CurStep, err)
@@ -195,8 +199,6 @@ func resumeOnce(ctx context.Context, state WorkflowState, s *State) (found bool,
 				t:       t,
 				Running: false,
 			}
-			t.PC++
-			s.PC++
 			err := resumeState(rCtx, state)
 			if err != nil {
 				return true, err
@@ -239,13 +241,6 @@ func Resume(ctx context.Context, wf WorkflowState, s *State, save Checkpoint) er
 	//before resuming workflow - make sure all previous teardowns are executed
 	for _, t := range s.Threads {
 		for i := 0; i < len(t.WaitEvents); i++ {
-			if t.WaitEvents[i].Status == EventPending { // event wasn't setup yet, no need to call Teardown
-				t.WaitEvents = append(t.WaitEvents[:i], t.WaitEvents[i+1:]...) // remove successful teardown
-				err := save(false)
-				if err != nil {
-					return err
-				}
-			}
 			if t.WaitEvents[i].Status != EventSetup {
 				continue
 			}
@@ -273,6 +268,7 @@ func Resume(ctx context.Context, wf WorkflowState, s *State, save Checkpoint) er
 				continue
 			}
 			t.WaitEvents = append(t.WaitEvents[:i], t.WaitEvents[i+1:]...) // remove successful teardown
+			i--
 			err = save(false)
 			if err != nil {
 				return err
@@ -319,7 +315,6 @@ func Resume(ctx context.Context, wf WorkflowState, s *State, save Checkpoint) er
 			if err != nil {
 				t.WaitEvents[i].Status = EventSetupError
 				t.WaitEvents[i].Error = err.Error()
-				t.WaitEvents[i].Req.SetupData = d
 				err := save(false)
 				if err != nil {
 					return err
@@ -327,6 +322,7 @@ func Resume(ctx context.Context, wf WorkflowState, s *State, save Checkpoint) er
 				continue
 			}
 			t.WaitEvents[i].Status = EventSetup
+			t.WaitEvents[i].Req.SetupData = d
 			err = save(false)
 			if err != nil {
 				return err
@@ -368,8 +364,6 @@ func HandleCallback(ctx context.Context, req CallbackRequest, wf WorkflowState, 
 	if err != nil {
 		return nil, err
 	}
-	t.PC++
-	s.PC++
 	return rCtx.CallbackOutput, save(true)
 
 }
