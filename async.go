@@ -246,6 +246,9 @@ func Resume(ctx context.Context, wf WorkflowState, s *State, save Checkpoint) er
 					return err
 				}
 			}
+			if t.WaitEvents[i].Status != EventSetup {
+				continue
+			}
 			h, err := FindHandler(t.WaitEvents[i].Req, wf.Definition())
 			if err != nil {
 				return fmt.Errorf("can' find handler: %v", err)
