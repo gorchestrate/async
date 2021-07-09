@@ -353,16 +353,6 @@ func HandleCallback(ctx context.Context, req CallbackRequest, wf WorkflowState, 
 		return nil, err
 	}
 
-	// When we receive valid callback - it may arrive before Setup() events were called.
-	// This could happen if Resume() execution was interrupted in the middle and then callback arrived.
-	// Therefore we should first try to resume the state to make sure all Setup() functions were executed first
-	// and only then handle the callback.
-	// We will add retries for Setup() and Teardown() in future to make sure they are always executed.
-	// If everything was fine - Resume will not execute anything
-	err = Resume(ctx, wf, s, save)
-	if err != nil {
-		return nil, fmt.Errorf("err resuming state before handling callback: %v", err)
-	}
 	rCtx := &ResumeContext{
 		ctx:           ctx,
 		s:             s,
