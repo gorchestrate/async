@@ -9,7 +9,7 @@ import (
 
 // WorkflowState should be a Go struct supporting JSON unmarshalling into it.
 // When process is resumed - current state is unmarshalled into it and then Definition() is called.
-// This is needed to eliminate lasy parameters i.e.
+// This is needed to eliminate lasy parameters and conditions i.e.
 // instead of 'If( func() bool { return s.IsAvailable})' we can write 'If(s.IsAvailable)'.
 type WorkflowState interface {
 	// Definition func may be called multiple times so it should be idempotent.
@@ -225,6 +225,11 @@ func (s SelectStmt) Resume(ctx *ResumeContext) (*Stop, error) {
 
 	if s.Name == ctx.t.CurStep {
 		ctx.Running = true
+		for i := 0; i < len(ctx.t.WaitEvents); i++ {
+			if ctx.t.WaitEvents[i].Req.Name == s.Name && ctx.t.WaitEvents[i].Status == EventSetup {
+				ctx.t.WaitEvents[i].Status = EventPendingTeardown
+			}
+		}
 		for _, c := range s.Cases {
 			if c.Callback.Name == ctx.Callback.Name {
 				if c.Handler != nil {

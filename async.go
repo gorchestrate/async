@@ -15,10 +15,11 @@ type WaitEvent struct {
 type WaitEventStatus string
 
 const (
-	EventPending       WaitEventStatus = "Pending"       // event is just created
-	EventSetup         WaitEventStatus = "Setup"         // event was successfully setup
-	EventSetupError    WaitEventStatus = "SetupError"    // there was an error during setup
-	EventTeardownError WaitEventStatus = "TeardownError" // there was an error during teardown
+	EventPendingSetup    WaitEventStatus = "PendingSetup"    // event is just created
+	EventSetup           WaitEventStatus = "Setup"           // event was successfully setup
+	EventPendingTeardown WaitEventStatus = "PendingTeardown" // event was successfully setup
+	EventSetupError      WaitEventStatus = "SetupError"      // there was an error during setup
+	EventTeardownError   WaitEventStatus = "TeardownError"   // there was an error during teardown
 )
 
 type State struct {
@@ -103,6 +104,8 @@ func resumeState(ctx *ResumeContext, state WorkflowState) error {
 			return false
 		})
 	}
+	ctx.t.PC++
+	ctx.s.PC++
 	stop, err := resumeThread.Resume(ctx)
 	if err != nil {
 		return fmt.Errorf("err during workflow execution: %v", err)
@@ -110,17 +113,17 @@ func resumeState(ctx *ResumeContext, state WorkflowState) error {
 	if stop == nil && !ctx.Running {
 		return fmt.Errorf("callback not found: %v", ctx)
 	}
-
-	// workflow finished (i.e. main thread finished)
-	if stop != nil && stop.Return && ctx.t.ID == MainThread {
-		ctx.s.Status = WorkflowFinished
-		ctx.t.PC++
-		ctx.s.PC++
+	// thread returned
+	if stop == nil || (stop != nil && stop.Return) {
+		ctx.s.Threads.Remove(ctx.t.ID)
+		if ctx.t.ID == MainThread {
+			ctx.s.Status = WorkflowFinished
+		}
 		return nil
 	}
 
-	// thread returned
-	if stop != nil && stop.Return {
+	// thread returned implicitly (all statements were finished)
+	if stop == nil && err == nil {
 		ctx.s.Threads.Remove(ctx.t.ID)
 		return nil
 	}
@@ -135,20 +138,16 @@ func resumeState(ctx *ResumeContext, state WorkflowState) error {
 	if stop.Step != "" {
 		ctx.t.CurStep = stop.Step
 		ctx.t.Status = ThreadExecuting
-		ctx.t.PC++
-		ctx.s.PC++
 		return nil
 	}
 
 	// blocked on select
 	ctx.t.CurStep = stop.Select.Name
 	for _, c := range stop.Select.Cases {
-		ctx.t.PC++
-		ctx.s.PC++
 		c.Callback.PC = ctx.t.PC
 		c.Callback.WorkflowID = ctx.s.ID
 		c.Callback.ThreadID = ctx.t.ID
-		ctx.t.WaitEvents = append(ctx.t.WaitEvents, WaitEvent{Req: c.Callback, Status: EventPending})
+		ctx.t.WaitEvents = append(ctx.t.WaitEvents, WaitEvent{Req: c.Callback, Status: EventPendingSetup})
 	}
 	ctx.t.Status = ThreadWaiting
 	return nil
@@ -191,6 +190,8 @@ func resumeOnce(ctx context.Context, state WorkflowState, s *State) (found bool,
 				return true, fmt.Errorf("err during step %v execution: %v", t.CurStep, err)
 			}
 			t.Status = ThreadResuming
+			t.PC++
+			s.PC++
 			return true, nil
 		case ThreadResuming:
 			rCtx := &ResumeContext{
@@ -217,7 +218,7 @@ func (t *Thread) WaitingForCallback(cb CallbackRequest) error {
 		if evt.Req.Name != cb.Name {
 			continue
 		}
-		if evt.Status == EventSetup || evt.Status == EventPending {
+		if evt.Status == EventSetup || evt.Status == EventPendingSetup {
 			return nil
 		}
 		return fmt.Errorf("got callback on event with unexpected status: %v", evt.Status)
@@ -241,7 +242,7 @@ func Resume(ctx context.Context, wf WorkflowState, s *State, save Checkpoint) er
 	//before resuming workflow - make sure all previous teardowns are executed
 	for _, t := range s.Threads {
 		for i := 0; i < len(t.WaitEvents); i++ {
-			if t.WaitEvents[i].Status != EventSetup {
+			if t.WaitEvents[i].Status != EventPendingTeardown {
 				continue
 			}
 			h, err := FindHandler(t.WaitEvents[i].Req, wf.Definition())
@@ -295,7 +296,7 @@ func Resume(ctx context.Context, wf WorkflowState, s *State, save Checkpoint) er
 
 	for _, t := range s.Threads {
 		for i := 0; i < len(t.WaitEvents); i++ {
-			if t.WaitEvents[i].Status != EventPending {
+			if t.WaitEvents[i].Status != EventPendingSetup {
 				continue
 			}
 			h, err := FindHandler(t.WaitEvents[i].Req, wf.Definition())
@@ -375,7 +376,7 @@ func HandleEvent(ctx context.Context, name string, wf WorkflowState, s *State, i
 	var req CallbackRequest
 	for _, tr := range s.Threads {
 		for _, e := range tr.WaitEvents {
-			if e.Req.Name == name && e.Status == EventPending || e.Status == EventSetup {
+			if e.Req.Name == name && (e.Status == EventPendingSetup || e.Status == EventSetup) {
 				req = e.Req
 			}
 		}
