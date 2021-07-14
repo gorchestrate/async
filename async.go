@@ -95,7 +95,7 @@ func resumeState(ctx *ResumeContext, state WorkflowState) error {
 	resumeThread := Stmt(state.Definition())
 	// if we are resuming non-main thread - find it's definition in the AST
 	if ctx.t.Name != MainThread {
-		Walk(state.Definition(), func(s Stmt) bool {
+		_, err := Walk(state.Definition(), func(s Stmt) bool {
 			gStmt, ok := s.(GoStmt)
 			if ok && gStmt.Name == ctx.t.Name {
 				resumeThread = gStmt.Stmt
@@ -103,6 +103,9 @@ func resumeState(ctx *ResumeContext, state WorkflowState) error {
 			}
 			return false
 		})
+		if err != nil {
+			return fmt.Errorf("can't find thread definition %v", ctx.t.Name)
+		}
 	}
 	ctx.t.PC++
 	ctx.s.PC++
@@ -181,11 +184,15 @@ func resumeOnce(ctx context.Context, state WorkflowState, s *State) (found bool,
 	for _, t := range s.Threads {
 		switch t.Status {
 		case ThreadExecuting:
-			step, ok := FindStep(t.CurStep, state.Definition()).(StmtStep)
+			stepI, err := FindStep(t.CurStep, state.Definition())
+			if err != nil {
+				return false, fmt.Errorf("err finding step: %v", err)
+			}
+			step, ok := stepI.(StmtStep)
 			if !ok {
 				return true, fmt.Errorf("can't find step %v", t.CurStep)
 			}
-			err := step.Action()
+			err = step.Action()
 			if err != nil {
 				return true, fmt.Errorf("err during step %v execution: %v", t.CurStep, err)
 			}

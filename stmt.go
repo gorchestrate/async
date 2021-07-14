@@ -371,9 +371,9 @@ func (s GoStmt) Resume(ctx *ResumeContext) (*Stop, error) {
 	return s.Stmt.Resume(ctx)
 }
 
-func FindStep(name string, sec Stmt) Stmt {
+func FindStep(name string, sec Stmt) (Stmt, error) {
 	var ret Stmt
-	Walk(sec, func(s Stmt) bool {
+	_, err := Walk(sec, func(s Stmt) bool {
 		switch x := s.(type) {
 		case StmtStep:
 			log.Print("step ", x.Name)
@@ -384,7 +384,7 @@ func FindStep(name string, sec Stmt) Stmt {
 		}
 		return false
 	})
-	return ret
+	return ret, err
 }
 
 func Walk(s Stmt, f func(s Stmt) bool) (bool, error) {
