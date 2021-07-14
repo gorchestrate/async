@@ -188,3 +188,170 @@ func TestHandler(t *testing.T) {
 	require.Equal(t, 6, wf.Meta.PC) // increase PC by 2 since we stopped at async step and then resumed
 	require.Len(t, wf.Meta.Threads, 0)
 }
+
+type TestLoopWorkflow struct {
+	Meta State
+	I    int
+	Log  string
+}
+
+func (t *TestLoopWorkflow) Definition() Section {
+	return S(
+		For(t.I < 5, "i is less than 5",
+			Step("step1", func() error {
+				t.I++
+				t.Log += "l"
+				return nil
+			}),
+		),
+		Step("reset i", func() error {
+			t.I = 0
+			return nil
+		}),
+		For(t.I < 2, "i is less than 2",
+			Wait("wait in loop for event",
+				On("event", DumbHandler{
+					F: func() {
+						t.Log += "h"
+						t.I++
+					},
+				},
+					Step("step2", func() error {
+						t.Log += "a"
+						return nil
+					}),
+				),
+			),
+		),
+	)
+}
+
+func TestLoop(t *testing.T) {
+	wf := TestLoopWorkflow{
+		Meta: NewState("1", "empty"),
+	}
+	err := Resume(context.Background(), &wf, &wf.Meta, func(scheduleResume bool) error {
+		require.False(t, scheduleResume)
+		return nil
+	})
+	require.Nil(t, err)
+	require.Equal(t, WorkflowRunning, wf.Meta.Status)
+	require.Len(t, wf.Meta.Threads, 1)
+	require.Len(t, wf.Meta.Threads[0].WaitEvents, 1)
+	require.Equal(t, ThreadWaiting, wf.Meta.Threads[0].Status)
+	require.Equal(t, "lllll", wf.Log)
+
+	_, err = HandleEvent(context.Background(), "event", &wf, &wf.Meta, nil, func(scheduleResume bool) error {
+		require.True(t, scheduleResume)
+		return nil
+	})
+	require.Nil(t, err)
+	require.Equal(t, WorkflowRunning, wf.Meta.Status)
+	require.Equal(t, ThreadExecuting, wf.Meta.Threads[0].Status)
+	require.Equal(t, "lllllh", wf.Log)
+
+	err = Resume(context.Background(), &wf, &wf.Meta, func(scheduleResume bool) error {
+		require.False(t, scheduleResume)
+		return nil
+	})
+	require.Nil(t, err)
+	require.Equal(t, WorkflowRunning, wf.Meta.Status)
+	require.Equal(t, ThreadWaiting, wf.Meta.Threads[0].Status)
+	require.Equal(t, "lllllha", wf.Log)
+
+	_, err = HandleEvent(context.Background(), "event", &wf, &wf.Meta, nil, func(scheduleResume bool) error {
+		require.True(t, scheduleResume)
+		return nil
+	})
+	require.Nil(t, err)
+	require.Equal(t, WorkflowRunning, wf.Meta.Status)
+	require.Equal(t, ThreadExecuting, wf.Meta.Threads[0].Status)
+	require.Equal(t, "lllllhah", wf.Log)
+
+	err = Resume(context.Background(), &wf, &wf.Meta, func(scheduleResume bool) error {
+		require.False(t, scheduleResume)
+		return nil
+	})
+	require.Nil(t, err)
+	require.Equal(t, WorkflowFinished, wf.Meta.Status)
+	require.Equal(t, "lllllhaha", wf.Log)
+}
+
+type TestIfElseWorkflow struct {
+	Meta State
+	Str  string
+}
+
+func (t *TestIfElseWorkflow) Definition() Section {
+	return S(
+		If(t.Str == "",
+			Step("set to b", func() error {
+				t.Str = "b"
+				return nil
+			}),
+		).ElseIf(t.Str == "c",
+			Return(),
+		).Else(
+			Step("duplicate", func() error {
+				t.Str += t.Str
+				return nil
+			}),
+			Return(),
+		),
+		Switch(
+			Case(t.Str == "a", Step("add a", func() error {
+				t.Str += "a"
+				return nil
+			})),
+			Case(t.Str == "b", S(
+				Step("add b", func() error {
+					t.Str += "b"
+					return nil
+				}),
+				Wait("wait after b",
+					On("event", DumbHandler{F: func() {
+						t.Str += "h"
+					}}),
+				),
+			),
+			),
+		),
+	)
+}
+
+func TestIfElse(t *testing.T) {
+	wf := TestIfElseWorkflow{
+		Meta: NewState("1", "empty"),
+		Str:  "a",
+	}
+	err := Resume(context.Background(), &wf, &wf.Meta, func(scheduleResume bool) error {
+		require.False(t, scheduleResume)
+		return nil
+	})
+	require.Nil(t, err)
+	require.Equal(t, "aa", wf.Str)
+	require.Equal(t, WorkflowFinished, wf.Meta.Status)
+	require.Len(t, wf.Meta.Threads, 0)
+
+	wf = TestIfElseWorkflow{
+		Meta: NewState("1", "empty"),
+		Str:  "",
+	}
+	err = Resume(context.Background(), &wf, &wf.Meta, func(scheduleResume bool) error {
+		require.False(t, scheduleResume)
+		return nil
+	})
+	require.Nil(t, err)
+	require.Equal(t, "bb", wf.Str)
+	require.Equal(t, WorkflowRunning, wf.Meta.Status)
+	require.Equal(t, ThreadWaiting, wf.Meta.Threads[0].Status)
+
+	_, err = HandleEvent(context.Background(), "event", &wf, &wf.Meta, nil, func(scheduleResume bool) error {
+		require.True(t, scheduleResume)
+		return nil
+	})
+	require.Nil(t, err)
+	require.Equal(t, "bbh", wf.Str)
+	require.Equal(t, WorkflowFinished, wf.Meta.Status)
+	require.Len(t, wf.Meta.Threads, 0)
+}

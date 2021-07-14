@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"reflect"
 )
 
@@ -103,16 +104,20 @@ type SwitchCase struct {
 	Stmt      Stmt
 }
 
-type SwitchStmt []SwitchCase
-
-// execute statements based on condition
-func Switch(ss ...SwitchCase) SwitchStmt {
-	return ss
+type SwitchStmt struct {
+	Cases []SwitchCase
 }
 
-func (s SwitchStmt) Resume(ctx *ResumeContext) (*Stop, error) {
+// execute statements based on condition
+func Switch(ss ...SwitchCase) *SwitchStmt {
+	return &SwitchStmt{
+		Cases: ss,
+	}
+}
+
+func (s *SwitchStmt) Resume(ctx *ResumeContext) (*Stop, error) {
 	if ctx.Running {
-		for _, v := range s {
+		for _, v := range s.Cases {
 			if v.Cond {
 				b, err := v.Stmt.Resume(ctx)
 				if err != nil || b != nil {
@@ -124,22 +129,41 @@ func (s SwitchStmt) Resume(ctx *ResumeContext) (*Stop, error) {
 		return nil, nil
 	}
 
-	for _, v := range s {
+	for _, v := range s.Cases {
 		b, err := v.Stmt.Resume(ctx)
 		if err != nil || b != nil {
 			return b, err
+		}
+		if ctx.Running { // if select case was resumed - don't execute next ones
+			return nil, nil
 		}
 	}
 	return nil, nil
 }
 
-func If(cond bool, sec Stmt) SwitchStmt {
-	return SwitchStmt{
-		SwitchCase{
+func If(cond bool, sec ...Stmt) *SwitchStmt {
+	return &SwitchStmt{
+		Cases: []SwitchCase{{
 			Cond: cond,
-			Stmt: sec,
-		},
+			Stmt: Section(sec),
+		}},
 	}
+}
+
+func (s *SwitchStmt) ElseIf(cond bool, sec ...Stmt) *SwitchStmt {
+	s.Cases = append(s.Cases, SwitchCase{
+		Cond: cond,
+		Stmt: Section(sec),
+	})
+	return s
+}
+
+func (s *SwitchStmt) Else(sec ...Stmt) *SwitchStmt {
+	s.Cases = append(s.Cases, SwitchCase{
+		Cond: true,
+		Stmt: Section(sec),
+	})
+	return s
 }
 
 func Case(cond bool, sec Stmt) SwitchCase {
@@ -285,6 +309,9 @@ type BreakStmt struct {
 }
 
 func (s BreakStmt) Resume(ctx *ResumeContext) (*Stop, error) {
+	if !ctx.Running {
+		return nil, nil
+	}
 	ctx.Break = true
 	return nil, nil
 }
@@ -298,7 +325,12 @@ type ReturnStmt struct {
 }
 
 func (s ReturnStmt) Resume(ctx *ResumeContext) (*Stop, error) {
-	return &Stop{}, nil
+	if !ctx.Running {
+		return nil, nil
+	}
+	return &Stop{
+		Return: true,
+	}, nil
 }
 
 // Return stops this trhead
@@ -344,6 +376,7 @@ func FindStep(name string, sec Stmt) Stmt {
 	Walk(sec, func(s Stmt) bool {
 		switch x := s.(type) {
 		case StmtStep:
+			log.Print("step ", x.Name)
 			if x.Name == name {
 				ret = x
 				return true
@@ -384,8 +417,8 @@ func Walk(s Stmt, f func(s Stmt) bool) (bool, error) {
 		if err != nil || stop {
 			return stop, err
 		}
-	case SwitchStmt:
-		for _, v := range x {
+	case *SwitchStmt:
+		for _, v := range x.Cases {
 			stop, err := Walk(v.Stmt, f)
 			if err != nil || stop {
 				return stop, err
