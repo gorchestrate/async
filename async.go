@@ -370,8 +370,10 @@ func HandleCallback(ctx context.Context, req CallbackRequest, wf WorkflowState, 
 }
 
 // HandleEvent is shortcut for calling HandleCallback() by event name.
-// Be careful - if you have events with the same name waiting - you will not have
-// control over which event will be called back. If this is important for you - you should use OnCallback() instead
+// Be careful - if you're using goroutines - there may be multiple events waiting with the same name.
+// Also, if you're waiting for event in a loop - event handlers from previous iterations could arrive late and trigger
+// events for future iterations.
+// For better control over which event will be called back - you should use OnCallback() instead and specify PC & Thread explicitly.
 func HandleEvent(ctx context.Context, name string, wf WorkflowState, s *State, input interface{}, save Checkpoint) (interface{}, error) {
 	var req CallbackRequest
 	for _, tr := range s.Threads {
