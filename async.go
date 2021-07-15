@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 )
 
 type WaitEvent struct {
@@ -41,8 +42,8 @@ type Thread struct {
 	ID         string
 	Name       string
 	Status     ThreadStatus // current status
-	CurStep    string       // current step of the workflow
-	WaitEvents []WaitEvent  // events workflow is waiting for. Valid only if Status = Waiting, otherwise should be empty.
+	CurStep    string       // current step
+	WaitEvents []WaitEvent  // waiting for Select() stmt conditions
 	PC         int
 }
 
@@ -51,9 +52,11 @@ const MainThread = "_main_"
 type ThreadStatus string
 
 const (
-	ThreadExecuting ThreadStatus = "Executing" // next step for this thread is to execute "CurStep" step
-	ThreadResuming  ThreadStatus = "Resuming"  // next step for this thread is to continue from "CurStep" step
-	ThreadWaiting   ThreadStatus = "Waiting"   // thread is waiting for "CurStep" wait condition and will be resumed via OnCallback()
+	ThreadExecuting        ThreadStatus = "Executing"        // next step for this thread is to execute "CurStep" step
+	ThreadResuming         ThreadStatus = "Resuming"         // next step for this thread is to continue from "CurStep" step
+	ThreadWaitingEvent     ThreadStatus = "WaitingEvent"     // thread is waiting for "CurStep" wait condition and will be resumed via OnCallback()
+	ThreadWaitingCondition ThreadStatus = "WaitingCondition" // thread is waiting for condition to happen. i.e. it's waiting for other thread to update some data
+
 )
 
 type Threads []*Thread
@@ -96,7 +99,7 @@ func resumeState(ctx *ResumeContext, state WorkflowState) error {
 	// if we are resuming non-main thread - find it's definition in the AST
 	if ctx.t.Name != MainThread {
 		_, err := Walk(state.Definition(), func(s Stmt) bool {
-			gStmt, ok := s.(GoStmt)
+			gStmt, ok := s.(*GoStmt)
 			if ok && gStmt.Name == ctx.t.Name {
 				resumeThread = gStmt.Stmt
 				return true
@@ -114,7 +117,7 @@ func resumeState(ctx *ResumeContext, state WorkflowState) error {
 		return fmt.Errorf("err during workflow execution: %v", err)
 	}
 	if stop == nil && !ctx.Running {
-		return fmt.Errorf("callback not found: %v", ctx)
+		return fmt.Errorf("callback not found: %#v", ctx)
 	}
 	// thread returned
 	if stop == nil || (stop != nil && stop.Return) {
@@ -137,14 +140,21 @@ func resumeState(ctx *ResumeContext, state WorkflowState) error {
 		return nil
 	}
 
-	// blocked on step
+	// waiting for step to be executed
 	if stop.Step != "" {
 		ctx.t.CurStep = stop.Step
 		ctx.t.Status = ThreadExecuting
 		return nil
 	}
 
-	// blocked on select
+	// waiting for condition
+	if stop.Cond != "" {
+		ctx.t.CurStep = stop.Cond
+		ctx.t.Status = ThreadWaitingCondition
+		return nil
+	}
+
+	// waiting for event
 	ctx.t.CurStep = stop.Select.Name
 	for _, c := range stop.Select.Cases {
 		c.Callback.PC = ctx.t.PC
@@ -152,7 +162,7 @@ func resumeState(ctx *ResumeContext, state WorkflowState) error {
 		c.Callback.ThreadID = ctx.t.ID
 		ctx.t.WaitEvents = append(ctx.t.WaitEvents, WaitEvent{Req: c.Callback, Status: EventPendingSetup})
 	}
-	ctx.t.Status = ThreadWaiting
+	ctx.t.Status = ThreadWaitingEvent
 	return nil
 }
 
@@ -184,19 +194,19 @@ func resumeOnce(ctx context.Context, state WorkflowState, s *State) (found bool,
 	for _, t := range s.Threads {
 		switch t.Status {
 		case ThreadExecuting:
-			stepI, err := FindStep(t.CurStep, state.Definition())
+			step, err := FindStep(t.CurStep, state.Definition())
 			if err != nil {
 				return false, fmt.Errorf("err finding step: %v", err)
 			}
-			step, ok := stepI.(StmtStep)
-			if !ok {
-				return true, fmt.Errorf("can't find step %v", t.CurStep)
+			if step == nil {
+				return false, fmt.Errorf("can't find step: %v", err)
 			}
 			err = step.Action()
 			if err != nil {
 				return true, fmt.Errorf("err during step %v execution: %v", t.CurStep, err)
 			}
 			t.Status = ThreadResuming
+			log.Print("RESUME ", t.CurStep)
 			t.PC++
 			s.PC++
 			return true, nil
@@ -212,8 +222,27 @@ func resumeOnce(ctx context.Context, state WorkflowState, s *State) (found bool,
 				return true, err
 			}
 			return true, nil
-		case ThreadWaiting:
-			// thread that are waiting fore event don't need to be resumed
+		case ThreadWaitingEvent:
+			// nothing needs to be done for thread waiting for event
+		case ThreadWaitingCondition:
+			// conditional thread should be executed last
+			// this gives consistency in parallel thread execution
+			// i.e. parallel threads are able to resume & finish resume execution after condition was met.
+		}
+	}
+	for _, t := range s.Threads {
+		switch t.Status {
+		case ThreadWaitingCondition:
+			// check if condition is met
+			s, err := FindWaitingStep(t.CurStep, state.Definition())
+			if err != nil {
+				return true, err
+			}
+			log.Printf("Find %v %v ", t.CurStep, s.Cond)
+			if s.Cond {
+				t.Status = ThreadResuming
+				return true, nil
+			}
 			continue
 		}
 	}
@@ -296,7 +325,7 @@ func Resume(ctx context.Context, wf WorkflowState, s *State, save Checkpoint) er
 		if err != nil {
 			return err
 		}
-		if i > 10000 {
+		if i > 100 {
 			return fmt.Errorf("resume didn't finish after 10k steps")
 		}
 	}

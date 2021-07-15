@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"reflect"
 )
 
@@ -43,6 +42,7 @@ type Stop struct {
 	Step   string      // execute step
 	Select *SelectStmt // wait for Events
 	Return bool        // stop this thread
+	Cond   string      // wait for cond
 }
 
 // Section is similar to code block {} with a list of statements.
@@ -181,17 +181,44 @@ func Default(sec Stmt) SwitchCase {
 	}
 }
 
+type WaitStmt struct {
+	CondLabel string
+	Cond      bool
+}
+
+// Wait statement wait for condition to be true.
+
+func Wait(cond bool, label string) WaitStmt {
+	return WaitStmt{
+		Cond:      cond,
+		CondLabel: label,
+	}
+}
+
+func (f WaitStmt) Resume(ctx *ResumeContext) (*Stop, error) {
+	if ctx.Running && !f.Cond { // block only if cond == false
+		return &Stop{Cond: f.CondLabel}, nil
+	}
+
+	if ctx.t.CurStep == f.CondLabel {
+		if !f.Cond {
+			return nil, fmt.Errorf("resuming waiting condition that is false")
+		}
+		ctx.Running = true
+	}
+	return nil, nil
+}
+
 type ForStmt struct {
 	CondLabel string
 	Cond      bool // nil cond for infinite loop
 	Stmt      Stmt
 }
 
-func For(cond bool, condLabel string, sec Stmt) Stmt {
+func For(cond bool, ss ...Stmt) Stmt {
 	return ForStmt{
-		CondLabel: condLabel,
-		Cond:      cond,
-		Stmt:      sec,
+		Cond: cond,
+		Stmt: Section(ss),
 	}
 }
 
@@ -227,8 +254,8 @@ type SelectStmt struct {
 	Cases []WaitCond
 }
 
-// Wait for multiple conditions and execute only one
-func Wait(name string, ss ...WaitCond) SelectStmt {
+// Select for multiple conditions and execute only one
+func Select(name string, ss ...WaitCond) SelectStmt {
 	return SelectStmt{
 		Name:  name,
 		Cases: ss,
@@ -346,8 +373,8 @@ type GoStmt struct {
 	Stmt Stmt
 }
 
-func Go(name string, body Stmt) GoStmt {
-	return GoStmt{
+func Go(name string, body Stmt) *GoStmt {
+	return &GoStmt{
 		ID: func() string {
 			return name + "_threadID"
 		},
@@ -356,11 +383,12 @@ func Go(name string, body Stmt) GoStmt {
 	}
 }
 
-func (s *GoStmt) WithID(id func() string) {
+func (s *GoStmt) WithID(id func() string) *GoStmt {
 	s.ID = id
+	return s
 }
 
-func (s GoStmt) Resume(ctx *ResumeContext) (*Stop, error) {
+func (s *GoStmt) Resume(ctx *ResumeContext) (*Stop, error) {
 	if ctx.Running {
 		return nil, ctx.s.Threads.Add(&Thread{
 			ID:     s.ID(),
@@ -371,13 +399,27 @@ func (s GoStmt) Resume(ctx *ResumeContext) (*Stop, error) {
 	return s.Stmt.Resume(ctx)
 }
 
-func FindStep(name string, sec Stmt) (Stmt, error) {
-	var ret Stmt
+func FindStep(name string, sec Stmt) (*StmtStep, error) {
+	var ret StmtStep
 	_, err := Walk(sec, func(s Stmt) bool {
 		switch x := s.(type) {
 		case StmtStep:
-			log.Print("step ", x.Name)
 			if x.Name == name {
+				ret = x
+				return true
+			}
+		}
+		return false
+	})
+	return &ret, err
+}
+
+func FindWaitingStep(name string, sec Stmt) (WaitStmt, error) {
+	var ret WaitStmt
+	_, err := Walk(sec, func(s Stmt) bool {
+		switch x := s.(type) {
+		case WaitStmt:
+			if x.CondLabel == name {
 				ret = x
 				return true
 			}
@@ -400,6 +442,8 @@ func Walk(s Stmt, f func(s Stmt) bool) (bool, error) {
 		return false, nil
 	case StmtStep:
 		return false, nil
+	case WaitStmt:
+		return false, nil
 	case SelectStmt:
 		for _, v := range x.Cases {
 			stop, err := Walk(v.Stmt, f)
@@ -407,7 +451,7 @@ func Walk(s Stmt, f func(s Stmt) bool) (bool, error) {
 				return stop, err
 			}
 		}
-	case GoStmt:
+	case *GoStmt:
 		stop, err := Walk(x.Stmt, f)
 		if err != nil || stop {
 			return stop, err

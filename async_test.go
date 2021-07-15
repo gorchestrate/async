@@ -99,7 +99,9 @@ func (t DumbHandler) Teardown(ctx context.Context, req CallbackRequest) error {
 }
 
 func (t DumbHandler) Handle(ctx context.Context, req CallbackRequest, input interface{}) (interface{}, error) {
-	t.F()
+	if t.F != nil {
+		t.F()
+	}
 	return input, nil
 }
 
@@ -109,7 +111,7 @@ func (t *TestHandlerWorkflow) Definition() Section {
 			t.Log += "start"
 			return nil
 		}),
-		Wait("wait",
+		Select("wait",
 			On("event", DumbHandler{
 				F: func() {
 					t.Log += ",sync"
@@ -137,7 +139,7 @@ func TestHandler(t *testing.T) {
 	require.Equal(t, "wait", tr.CurStep)
 	require.Equal(t, MainThread, tr.ID)
 	require.Equal(t, MainThread, tr.Name)
-	require.Equal(t, ThreadWaiting, tr.Status)
+	require.Equal(t, ThreadWaitingEvent, tr.Status)
 	require.Equal(t, 3, tr.PC) // same PC as in state
 	require.Len(t, tr.WaitEvents, 1)
 	require.Equal(t, "", tr.WaitEvents[0].Error)
@@ -197,7 +199,7 @@ type TestLoopWorkflow struct {
 
 func (t *TestLoopWorkflow) Definition() Section {
 	return S(
-		For(t.I < 5, "i is less than 5",
+		For(t.I < 5,
 			Step("step1", func() error {
 				t.I++
 				t.Log += "l"
@@ -208,8 +210,8 @@ func (t *TestLoopWorkflow) Definition() Section {
 			t.I = 0
 			return nil
 		}),
-		For(t.I < 2, "i is less than 2",
-			Wait("wait in loop for event",
+		For(t.I < 2,
+			Select("wait in loop for event",
 				On("event", DumbHandler{
 					F: func() {
 						t.Log += "h"
@@ -238,7 +240,7 @@ func TestLoop(t *testing.T) {
 	require.Equal(t, WorkflowRunning, wf.Meta.Status)
 	require.Len(t, wf.Meta.Threads, 1)
 	require.Len(t, wf.Meta.Threads[0].WaitEvents, 1)
-	require.Equal(t, ThreadWaiting, wf.Meta.Threads[0].Status)
+	require.Equal(t, ThreadWaitingEvent, wf.Meta.Threads[0].Status)
 	require.Equal(t, "lllll", wf.Log)
 
 	_, err = HandleEvent(context.Background(), "event", &wf, &wf.Meta, nil, func(scheduleResume bool) error {
@@ -256,7 +258,7 @@ func TestLoop(t *testing.T) {
 	})
 	require.Nil(t, err)
 	require.Equal(t, WorkflowRunning, wf.Meta.Status)
-	require.Equal(t, ThreadWaiting, wf.Meta.Threads[0].Status)
+	require.Equal(t, ThreadWaitingEvent, wf.Meta.Threads[0].Status)
 	require.Equal(t, "lllllha", wf.Log)
 
 	_, err = HandleEvent(context.Background(), "event", &wf, &wf.Meta, nil, func(scheduleResume bool) error {
@@ -308,7 +310,7 @@ func (t *TestIfElseWorkflow) Definition() Section {
 					t.Str += "b"
 					return nil
 				}),
-				Wait("wait after b",
+				Select("wait after b",
 					On("event", DumbHandler{F: func() {
 						t.Str += "h"
 					}}),
@@ -344,7 +346,7 @@ func TestIfElse(t *testing.T) {
 	require.Nil(t, err)
 	require.Equal(t, "bb", wf.Str)
 	require.Equal(t, WorkflowRunning, wf.Meta.Status)
-	require.Equal(t, ThreadWaiting, wf.Meta.Threads[0].Status)
+	require.Equal(t, ThreadWaitingEvent, wf.Meta.Threads[0].Status)
 
 	_, err = HandleEvent(context.Background(), "event", &wf, &wf.Meta, nil, func(scheduleResume bool) error {
 		require.True(t, scheduleResume)
@@ -352,6 +354,115 @@ func TestIfElse(t *testing.T) {
 	})
 	require.Nil(t, err)
 	require.Equal(t, "bbh", wf.Str)
+	require.Equal(t, WorkflowFinished, wf.Meta.Status)
+	require.Len(t, wf.Meta.Threads, 0)
+}
+
+type TestGoWorkflow struct {
+	Meta State
+	I    int
+	WG   int
+	Log  string
+}
+
+func (t *TestGoWorkflow) Definition() Section {
+	return S(
+		For(t.I < 5,
+			Step("inc", func() error {
+				t.I++
+				t.WG++
+				return nil
+			}),
+			Go("parallel", S(
+				Step("log", func() error {
+					t.Log += "a"
+					t.WG--
+					return nil
+				}),
+			)).WithID(func() string { return fmt.Sprint(t.I) }),
+		),
+		Select("wait for goroutines to finish",
+			On("event", DumbHandler{}),
+		),
+		Step("done", func() error {
+			t.Log += "_done"
+			return nil
+		}),
+	)
+}
+
+func TestGo(t *testing.T) {
+	wf := TestGoWorkflow{
+		Meta: NewState("1", "empty"),
+	}
+	err := Resume(context.Background(), &wf, &wf.Meta, func(scheduleResume bool) error {
+		require.False(t, scheduleResume)
+		return nil
+	})
+	require.Nil(t, err)
+	require.Equal(t, "aaaaa", wf.Log)
+	require.Equal(t, WorkflowRunning, wf.Meta.Status)
+	require.Equal(t, ThreadWaitingEvent, wf.Meta.Threads[0].Status)
+
+	_, err = HandleEvent(context.Background(), "event", &wf, &wf.Meta, nil, func(scheduleResume bool) error {
+		require.True(t, scheduleResume)
+		return nil
+	})
+	require.Nil(t, err)
+
+	err = Resume(context.Background(), &wf, &wf.Meta, func(scheduleResume bool) error {
+		require.False(t, scheduleResume)
+		return nil
+	})
+	require.Nil(t, err)
+	require.Equal(t, "aaaaa_done", wf.Log)
+	require.Equal(t, WorkflowFinished, wf.Meta.Status)
+	require.Len(t, wf.Meta.Threads, 0)
+}
+
+type TestWaitWorkflow struct {
+	Meta State
+	I    int
+	WG   int
+	Log  string
+}
+
+func (t *TestWaitWorkflow) Definition() Section {
+	return S(
+		For(t.I < 5,
+			Step("inc", func() error {
+				t.I++
+				t.WG++
+				return nil
+			}),
+			Go("parallel", S(
+				Step("log", func() error {
+					t.Log += "a"
+					t.WG--
+					return nil
+				}),
+			)).WithID(func() string { return fmt.Sprint(t.I) }),
+		),
+		Wait(t.WG == 0, "waiting for WG"),
+		Step("done", func() error {
+			t.Log += "_done"
+			return nil
+		}),
+	)
+}
+
+func TestWait(t *testing.T) {
+	wf := TestWaitWorkflow{
+		Meta: NewState("1", "empty"),
+	}
+	err := Resume(context.Background(), &wf, &wf.Meta, func(scheduleResume bool) error {
+		require.False(t, scheduleResume)
+		return nil
+	})
+	d, _ := json.MarshalIndent(wf, "", " ")
+	fmt.Print(string(d))
+	require.Nil(t, err)
+	require.Equal(t, "aaaaa_done", wf.Log)
 	require.Equal(t, WorkflowFinished, wf.Meta.Status)
 	require.Len(t, wf.Meta.Threads, 0)
 }
