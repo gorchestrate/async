@@ -1,14 +1,8 @@
-### Gorchestrate your workflows! 
+### **async** is a library, not a framework
 
-**async** is a Go library to integrate workflow management into your application using **your existing infrastructure**.
+It makes workflow management in Go incredibly easy, but requires you to specify how you lock,store & schedule your workflows.
 
-I've spend 4 years to come up with this particular approach, and i'll apreciate if you'll try it out.
-
-#### Features
-* **This is a library, not a framework**. You can integrate it into your existing project infrastructure.
-* You can define all your workflow actions **right in the Go code**
-* You can update your workflow definition **while it is running**
-* Run multiple threads in single workflow using Golang semantics.
+I've spend 4 years to come up with this particular approach of handling workflows, and i'll apreciate if you'll try it out.
 
 #### Here's how it looks
 ```Go
@@ -90,6 +84,13 @@ Workflow is resumed(executed) by following events:
 3. When event arrives - you pass it to HandleEvent() method. This handles event and schedules Resume() call
 4. When Resume() is called we execute Teardown() for all events we were waiting. This allows you to deregister your events on external services.
 5. If workflow is not finished - go back to point 1.
+
+
+#### Features
+* Define all your workflow actions **right in the Go code**. Logic/action separation is done by using labels and closures.
+* You can update your workflow definition **while it is running**. Workflow state & definition are stored separately.
+* You can have multiple threads in single workflow and orchestrate them. 
+* You can test your workflows via unit-tests.
 
 
 ### Google Run & Google Cloud Tasks 
