@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 )
 
 type WaitEvent struct {
@@ -206,7 +205,6 @@ func resumeOnce(ctx context.Context, state WorkflowState, s *State) (found bool,
 				return true, fmt.Errorf("err during step %v execution: %v", t.CurStep, err)
 			}
 			t.Status = ThreadResuming
-			log.Print("RESUME ", t.CurStep)
 			t.PC++
 			s.PC++
 			return true, nil
@@ -238,8 +236,12 @@ func resumeOnce(ctx context.Context, state WorkflowState, s *State) (found bool,
 			if err != nil {
 				return true, err
 			}
-			log.Printf("Find %v %v ", t.CurStep, s.Cond)
 			if s.Cond {
+				if s.Handler != nil {
+					s.Handler()
+				}
+				// we should have syncronous handler to avoid concurrency issues.
+				// i.e. If condition was true, but then another thread resumes and it becomes false.
 				t.Status = ThreadResuming
 				return true, nil
 			}
@@ -325,8 +327,8 @@ func Resume(ctx context.Context, wf WorkflowState, s *State, save Checkpoint) er
 		if err != nil {
 			return err
 		}
-		if i > 100 {
-			return fmt.Errorf("resume didn't finish after 10k steps")
+		if i > 1000 {
+			return fmt.Errorf("resume didn't finish after 1000 steps")
 		}
 	}
 

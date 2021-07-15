@@ -184,14 +184,15 @@ func Default(sec Stmt) SwitchCase {
 type WaitStmt struct {
 	CondLabel string
 	Cond      bool
+	Handler   func() // executed when cond is true
 }
 
 // Wait statement wait for condition to be true.
-
-func Wait(cond bool, label string) WaitStmt {
+func Wait(cond bool, label string, handler func()) WaitStmt {
 	return WaitStmt{
 		Cond:      cond,
 		CondLabel: label,
+		Handler:   handler,
 	}
 }
 
@@ -199,7 +200,6 @@ func (f WaitStmt) Resume(ctx *ResumeContext) (*Stop, error) {
 	if ctx.Running && !f.Cond { // block only if cond == false
 		return &Stop{Cond: f.CondLabel}, nil
 	}
-
 	if ctx.t.CurStep == f.CondLabel {
 		if !f.Cond {
 			return nil, fmt.Errorf("resuming waiting condition that is false")

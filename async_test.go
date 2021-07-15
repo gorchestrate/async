@@ -423,7 +423,7 @@ func TestGo(t *testing.T) {
 type TestWaitWorkflow struct {
 	Meta State
 	I    int
-	WG   int
+	WG   WG
 	Log  string
 }
 
@@ -432,18 +432,18 @@ func (t *TestWaitWorkflow) Definition() Section {
 		For(t.I < 5,
 			Step("inc", func() error {
 				t.I++
-				t.WG++
+				t.WG.Add(1)
 				return nil
 			}),
 			Go("parallel", S(
 				Step("log", func() error {
 					t.Log += "a"
-					t.WG--
+					t.WG.Done()
 					return nil
 				}),
 			)).WithID(func() string { return fmt.Sprint(t.I) }),
 		),
-		Wait(t.WG == 0, "waiting for WG"),
+		t.WG.Wait("waiting for WG"),
 		Step("done", func() error {
 			t.Log += "_done"
 			return nil
@@ -459,8 +459,6 @@ func TestWait(t *testing.T) {
 		require.False(t, scheduleResume)
 		return nil
 	})
-	d, _ := json.MarshalIndent(wf, "", " ")
-	fmt.Print(string(d))
 	require.Nil(t, err)
 	require.Equal(t, "aaaaa_done", wf.Log)
 	require.Equal(t, WorkflowFinished, wf.Meta.Status)
