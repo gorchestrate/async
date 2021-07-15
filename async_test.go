@@ -279,6 +279,95 @@ func TestLoop(t *testing.T) {
 	require.Equal(t, "lllllhaha", wf.Log)
 }
 
+type TestBreakWorkflow struct {
+	Meta State
+	I    int
+	Log  string
+}
+
+func (t *TestBreakWorkflow) Definition() Section {
+	return S(
+		For(true,
+			Step("step1", func() error {
+				t.I++
+				t.Log += "l"
+				return nil
+			}),
+			If(t.I >= 5, Break()),
+		),
+		Step("reset i", func() error {
+			t.I = 0
+			return nil
+		}),
+		For(t.I < 2,
+			Select("wait in loop for event",
+				On("event", DumbHandler{
+					F: func() {
+						t.Log += "h"
+						t.I++
+					},
+				},
+					Step("step2", func() error {
+						t.Log += "a"
+						return nil
+					}),
+				),
+			),
+		),
+	)
+}
+
+func TestBreak(t *testing.T) {
+	wf := TestBreakWorkflow{
+		Meta: NewState("1", "empty"),
+	}
+	err := Resume(context.Background(), &wf, &wf.Meta, func(scheduleResume bool) error {
+		require.False(t, scheduleResume)
+		return nil
+	})
+	require.Nil(t, err)
+	require.Equal(t, WorkflowRunning, wf.Meta.Status)
+	require.Len(t, wf.Meta.Threads, 1)
+	require.Len(t, wf.Meta.Threads[0].WaitEvents, 1)
+	require.Equal(t, ThreadWaitingEvent, wf.Meta.Threads[0].Status)
+	require.Equal(t, "lllll", wf.Log)
+
+	_, err = HandleEvent(context.Background(), "event", &wf, &wf.Meta, nil, func(scheduleResume bool) error {
+		require.True(t, scheduleResume)
+		return nil
+	})
+	require.Nil(t, err)
+	require.Equal(t, WorkflowRunning, wf.Meta.Status)
+	require.Equal(t, ThreadExecuting, wf.Meta.Threads[0].Status)
+	require.Equal(t, "lllllh", wf.Log)
+
+	err = Resume(context.Background(), &wf, &wf.Meta, func(scheduleResume bool) error {
+		require.False(t, scheduleResume)
+		return nil
+	})
+	require.Nil(t, err)
+	require.Equal(t, WorkflowRunning, wf.Meta.Status)
+	require.Equal(t, ThreadWaitingEvent, wf.Meta.Threads[0].Status)
+	require.Equal(t, "lllllha", wf.Log)
+
+	_, err = HandleEvent(context.Background(), "event", &wf, &wf.Meta, nil, func(scheduleResume bool) error {
+		require.True(t, scheduleResume)
+		return nil
+	})
+	require.Nil(t, err)
+	require.Equal(t, WorkflowRunning, wf.Meta.Status)
+	require.Equal(t, ThreadExecuting, wf.Meta.Threads[0].Status)
+	require.Equal(t, "lllllhah", wf.Log)
+
+	err = Resume(context.Background(), &wf, &wf.Meta, func(scheduleResume bool) error {
+		require.False(t, scheduleResume)
+		return nil
+	})
+	require.Nil(t, err)
+	require.Equal(t, WorkflowFinished, wf.Meta.Status)
+	require.Equal(t, "lllllhaha", wf.Log)
+}
+
 type TestIfElseWorkflow struct {
 	Meta State
 	Str  string

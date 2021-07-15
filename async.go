@@ -43,6 +43,7 @@ type Thread struct {
 	Status     ThreadStatus // current status
 	CurStep    string       // current step
 	WaitEvents []WaitEvent  // waiting for Select() stmt conditions
+	Break      bool
 	PC         int
 }
 

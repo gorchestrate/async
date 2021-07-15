@@ -34,7 +34,6 @@ type ResumeContext struct {
 	CallbackOutput interface{}
 
 	Return bool
-	Break  bool
 }
 
 // Stop tells us that syncronous part of the workflow has finished. It means we either:
@@ -235,8 +234,8 @@ func (f ForStmt) Resume(ctx *ResumeContext) (*Stop, error) {
 			return nil, nil
 		}
 
-		if ctx.Break {
-			ctx.Break = false
+		if ctx.t.Break {
+			ctx.t.Break = false
 			return nil, nil
 		}
 
@@ -339,7 +338,7 @@ func (s BreakStmt) Resume(ctx *ResumeContext) (*Stop, error) {
 	if !ctx.Running {
 		return nil, nil
 	}
-	ctx.Break = true
+	ctx.t.Break = true
 	return nil, nil
 }
 
