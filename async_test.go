@@ -92,7 +92,7 @@ func (t DumbHandler) Setup(ctx context.Context, req CallbackRequest) (json.RawMe
 }
 
 func (t DumbHandler) Teardown(ctx context.Context, req CallbackRequest) error {
-	if !bytes.Equal([]byte(`{"a":"b"`), req.SetupData) {
+	if !bytes.Equal([]byte(`{"a":"b"}`), req.SetupData) {
 		return fmt.Errorf("Setup Or Teardown issue")
 	}
 	return nil
@@ -147,6 +147,7 @@ func TestHandler(t *testing.T) {
 	require.Equal(t, "event", tr.WaitEvents[0].Req.Name)
 	require.Equal(t, 3, tr.WaitEvents[0].Req.PC)
 	require.Equal(t, json.RawMessage(`{"a":"b"}`), tr.WaitEvents[0].Req.SetupData)
+	require.Equal(t, EventSetup, tr.WaitEvents[0].Status)
 	require.Equal(t, MainThread, tr.WaitEvents[0].Req.ThreadID)
 	require.Equal(t, "1", tr.WaitEvents[0].Req.WorkflowID)
 
@@ -187,6 +188,7 @@ func TestHandler(t *testing.T) {
 	require.Nil(t, err)
 	require.Equal(t, "start,sync,async", wf.Log)
 	require.Equal(t, WorkflowFinished, wf.Meta.Status)
+	require.Len(t, tr.WaitEvents, 0)
 	require.Equal(t, 6, wf.Meta.PC) // increase PC by 2 since we stopped at async step and then resumed
 	require.Len(t, wf.Meta.Threads, 0)
 }

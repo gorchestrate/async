@@ -183,7 +183,7 @@ func Default(sec Stmt) SwitchCase {
 type WaitStmt struct {
 	CondLabel string
 	Cond      bool
-	Handler   func() // executed when cond is true
+	Handler   func() // executed when cond is true.
 }
 
 // Wait statement wait for condition to be true.
@@ -275,8 +275,8 @@ func (s SelectStmt) Resume(ctx *ResumeContext) (*Stop, error) {
 
 	if s.Name == ctx.t.CurStep {
 		ctx.Running = true
-		for i := 0; i < len(ctx.t.WaitEvents); i++ {
-			if ctx.t.WaitEvents[i].Req.Name == s.Name && ctx.t.WaitEvents[i].Status == EventSetup {
+		for i, evt := range ctx.t.WaitEvents {
+			if evt.Status == EventSetup {
 				ctx.t.WaitEvents[i].Status = EventPendingTeardown
 			}
 		}

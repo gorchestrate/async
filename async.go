@@ -91,14 +91,64 @@ func (tt *Threads) Find(id string) (*Thread, bool) {
 	return nil, false
 }
 
+func Validate(s Section) error {
+	var oErr error
+	sections := map[string]bool{}
+	_, err := Walk(s, func(s Stmt) bool {
+		switch x := s.(type) {
+		case StmtStep:
+			if sections[x.Name] {
+				oErr = fmt.Errorf("duplicate step name: %v", x.Name)
+				return true
+			}
+			sections[x.Name] = true
+		case WaitStmt:
+			if sections[x.CondLabel] {
+				oErr = fmt.Errorf("duplicate wait step name: %v", x.CondLabel)
+				return true
+			}
+			sections[x.CondLabel] = true
+		case SelectStmt:
+			if sections[x.Name] {
+				oErr = fmt.Errorf("duplicate select name: %v", x.Name)
+				return true
+			}
+			sections[x.Name] = true
+			for _, v := range x.Cases {
+				if sections[v.Callback.Name] {
+					oErr = fmt.Errorf("duplicate select name: %v", v.Callback.Name)
+					return true
+				}
+				sections[v.Callback.Name] = true
+			}
+		case *GoStmt:
+			if sections[x.Name] {
+				oErr = fmt.Errorf("duplicate goroutine name: %v", x.Name)
+				return true
+			}
+			sections[x.Name] = true
+		}
+		return false
+	})
+	if err != nil {
+		return err
+	}
+	return oErr
+}
+
 func resumeState(ctx *ResumeContext, state WorkflowState) error {
 	if ctx.t.CurStep == "" { // thread has just started, let's make it running
 		ctx.Running = true
 	}
-	resumeThread := Stmt(state.Definition())
+	def := state.Definition()
+	err := Validate(def)
+	if err != nil {
+		return err
+	}
+	resumeThread := Stmt(def)
 	// if we are resuming non-main thread - find it's definition in the AST
 	if ctx.t.Name != MainThread {
-		_, err := Walk(state.Definition(), func(s Stmt) bool {
+		_, err := Walk(def, func(s Stmt) bool {
 			gStmt, ok := s.(*GoStmt)
 			if ok && gStmt.Name == ctx.t.Name {
 				resumeThread = gStmt.Stmt
@@ -194,7 +244,12 @@ func resumeOnce(ctx context.Context, state WorkflowState, s *State) (found bool,
 	for _, t := range s.Threads {
 		switch t.Status {
 		case ThreadExecuting:
-			step, err := FindStep(t.CurStep, state.Definition())
+			def := state.Definition()
+			err := Validate(def)
+			if err != nil {
+				return true, err
+			}
+			step, err := FindStep(t.CurStep, def)
 			if err != nil {
 				return false, fmt.Errorf("err finding step: %v", err)
 			}
@@ -233,7 +288,12 @@ func resumeOnce(ctx context.Context, state WorkflowState, s *State) (found bool,
 		switch t.Status {
 		case ThreadWaitingCondition:
 			// check if condition is met
-			s, err := FindWaitingStep(t.CurStep, state.Definition())
+			def := state.Definition()
+			err := Validate(def)
+			if err != nil {
+				return true, err
+			}
+			s, err := FindWaitingStep(t.CurStep, def)
 			if err != nil {
 				return true, err
 			}
@@ -284,7 +344,12 @@ func Resume(ctx context.Context, wf WorkflowState, s *State, save Checkpoint) er
 			if t.WaitEvents[i].Status != EventPendingTeardown {
 				continue
 			}
-			h, err := FindHandler(t.WaitEvents[i].Req, wf.Definition())
+			def := wf.Definition()
+			err := Validate(def)
+			if err != nil {
+				return err
+			}
+			h, err := FindHandler(t.WaitEvents[i].Req, def)
 			if err != nil {
 				return fmt.Errorf("can' find handler: %v", err)
 			}
@@ -338,7 +403,12 @@ func Resume(ctx context.Context, wf WorkflowState, s *State, save Checkpoint) er
 			if t.WaitEvents[i].Status != EventPendingSetup {
 				continue
 			}
-			h, err := FindHandler(t.WaitEvents[i].Req, wf.Definition())
+			def := wf.Definition()
+			err := Validate(def)
+			if err != nil {
+				return err
+			}
+			h, err := FindHandler(t.WaitEvents[i].Req, def)
 			if err != nil {
 				return fmt.Errorf("can' find handler: %v", err)
 			}
