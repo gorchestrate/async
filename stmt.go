@@ -17,10 +17,10 @@ type WorkflowState interface {
 	Definition() Section
 }
 
-// ResumeContext is used during workflow execution
+// resumeContext is used during workflow execution
 // It contains resume input as well as current state of the execution.
-type ResumeContext struct {
-	ctx context.Context `json:"-"`
+type resumeContext struct {
+	ctx context.Context
 	s   *State
 	t   *Thread // current thread to resume
 
@@ -54,7 +54,7 @@ func S(ss ...Stmt) Section {
 
 // Stmt is async statement definition that should support workflow resuming & search.
 type Stmt interface {
-	// Resume continues execution of the process, based on ResumeContext
+	// Resume continues execution of the process, based on resumeContext
 	// If ctx.Running == true Resume should execute the statement or continue execution after.
 	// If ctx.Running = false Resume should not execute the statement, but recursively search for the statement that needs to be resumed.
 	// If it needs to be resumed - don't execute it, but continue execution from this statement.
@@ -62,10 +62,10 @@ type Stmt interface {
 	// If stmt not found *Stop will be nil and ctx.Running will be false
 	// If stmt is found, but process has finished - *Stop will be nil and ctx.Running will be true
 	// Otherwise Resume should always return *Stop or err != nil
-	Resume(ctx *ResumeContext) (*Stop, error)
+	Resume(ctx *resumeContext) (*Stop, error)
 }
 
-func (s Section) Resume(ctx *ResumeContext) (*Stop, error) {
+func (s Section) Resume(ctx *resumeContext) (*Stop, error) {
 	for _, stmt := range s {
 		b, err := stmt.Resume(ctx)
 		if err != nil || b != nil {
@@ -80,7 +80,7 @@ type StmtStep struct {
 	Action func() error
 }
 
-func (s StmtStep) Resume(ctx *ResumeContext) (*Stop, error) {
+func (s StmtStep) Resume(ctx *resumeContext) (*Stop, error) {
 	if ctx.Running {
 		return &Stop{Step: s.Name}, nil
 	}
@@ -114,7 +114,7 @@ func Switch(ss ...SwitchCase) *SwitchStmt {
 	}
 }
 
-func (s *SwitchStmt) Resume(ctx *ResumeContext) (*Stop, error) {
+func (s *SwitchStmt) Resume(ctx *resumeContext) (*Stop, error) {
 	if ctx.Running {
 		for _, v := range s.Cases {
 			if v.Cond {
@@ -195,7 +195,7 @@ func Wait(cond bool, label string, handler func()) WaitStmt {
 	}
 }
 
-func (f WaitStmt) Resume(ctx *ResumeContext) (*Stop, error) {
+func (f WaitStmt) Resume(ctx *resumeContext) (*Stop, error) {
 	if ctx.Running && !f.Cond { // block only if cond == false
 		return &Stop{Cond: f.CondLabel}, nil
 	}
@@ -221,7 +221,7 @@ func For(cond bool, ss ...Stmt) Stmt {
 	}
 }
 
-func (f ForStmt) Resume(ctx *ResumeContext) (*Stop, error) {
+func (f ForStmt) Resume(ctx *resumeContext) (*Stop, error) {
 	if !ctx.Running {
 		b, err := f.Stmt.Resume(ctx)
 		if err != nil || b != nil {
@@ -261,14 +261,14 @@ func Select(name string, ss ...WaitCond) SelectStmt {
 	}
 }
 
-func safeResume(ctx *ResumeContext, s Stmt) (*Stop, error) {
+func safeResume(ctx *resumeContext, s Stmt) (*Stop, error) {
 	if s == nil {
 		return nil, nil
 	}
 	return s.Resume(ctx)
 }
 
-func (s SelectStmt) Resume(ctx *ResumeContext) (*Stop, error) {
+func (s SelectStmt) Resume(ctx *resumeContext) (*Stop, error) {
 	if ctx.Running {
 		return &Stop{Select: &s}, nil
 	}
@@ -334,7 +334,7 @@ func On(event string, handler Handler, stmts ...Stmt) WaitCond {
 type BreakStmt struct {
 }
 
-func (s BreakStmt) Resume(ctx *ResumeContext) (*Stop, error) {
+func (s BreakStmt) Resume(ctx *resumeContext) (*Stop, error) {
 	if !ctx.Running {
 		return nil, nil
 	}
@@ -350,7 +350,7 @@ func Break() BreakStmt {
 type ReturnStmt struct {
 }
 
-func (s ReturnStmt) Resume(ctx *ResumeContext) (*Stop, error) {
+func (s ReturnStmt) Resume(ctx *resumeContext) (*Stop, error) {
 	if !ctx.Running {
 		return nil, nil
 	}
@@ -387,7 +387,7 @@ func (s *GoStmt) WithID(id func() string) *GoStmt {
 	return s
 }
 
-func (s *GoStmt) Resume(ctx *ResumeContext) (*Stop, error) {
+func (s *GoStmt) Resume(ctx *resumeContext) (*Stop, error) {
 	if ctx.Running {
 		return nil, ctx.s.Threads.Add(&Thread{
 			ID:     s.ID(),

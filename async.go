@@ -137,7 +137,7 @@ func Validate(s Section) error {
 	return oErr
 }
 
-func resumeState(ctx *ResumeContext, state WorkflowState) error {
+func resumeState(ctx *resumeContext, state WorkflowState) error {
 	if ctx.t.CurStep == "" { // thread has just started, let's make it running
 		ctx.Running = true
 	}
@@ -255,7 +255,7 @@ func resumeOnce(ctx context.Context, state WorkflowState, s *State) (found bool,
 			s.PC++
 			return true, nil
 		case ThreadResuming:
-			rCtx := &ResumeContext{
+			rCtx := &resumeContext{
 				ctx:     ctx,
 				s:       s,
 				t:       t,
@@ -444,7 +444,7 @@ func HandleCallback(ctx context.Context, req CallbackRequest, wf WorkflowState, 
 			return nil, fmt.Errorf("got callback on event with unexpected status: %v", evt.Status)
 		}
 		t.WaitEvents[i].Handled = true
-		rCtx := &ResumeContext{
+		rCtx := &resumeContext{
 			ctx:           ctx,
 			s:             s,
 			t:             t,
