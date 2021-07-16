@@ -4,7 +4,13 @@ Gorchestrate makes stateful workflow management in Go incredibly easy.
 
 I've spend 4 years to come up with this particular approach of handling workflows, and i'll apreciate if you'll try it out.
 
-#### Here's how it looks
+
+
+#### Example App
+https://github.com/gorchestrate/pizzaapp
+This is an example of how you can use Google Cloud to build fully serverless stateful workflows, that could be scaled horizontally without too much efforts.
+
+#### Example Code
 ```Go
 type MyWorkflowState struct {
 	User     string
@@ -64,15 +70,16 @@ func (s *MyWorkflow) Finish(output string) Stmt {
 }
 ```
 
+
 ## Architecture
 Gorchestrate has stateless API and does not come with a database or scheduler. 
 It's intended to be integrated into applications, which will determine how & when workflows will be executed.
 
-Think this is a stateful scripting library - you want to execute some steps and want to save the state in persistent storage.
+Think this is a stateful script - you want to execute some steps and want to save the state of the script in persistent storage and then resume the script when some event comes in.
 
-Workflow is resumed(executed) by following events:
-* Scheduled call of Resume() method. It's scheduled right after workflow creation and event handling.
-* Explicit call of HandleEvent() method. It's called whenever some event happens.
+There are 2 ways to execute workflow:
+* Scheduled call of Resume() method. This is called when workflow starts or event was handled and we need to continue execution.
+* Explicit call of HandleEvent() method. This is called whenever some event happens.
 
 Brief description of how workflows are executed:
 0. Workflow is created and Resume() call is scheduled.
@@ -82,20 +89,6 @@ Brief description of how workflows are executed:
 4. Resume() will execute Teardown() for all events we were waiting for. This allows you to deregister your events on external services.
 5. Go to point 1 if main thread is not yet exited.
 
-
-
-
-#### Features
-* Define all your workflow actions **right in the Go code**. Logic/action separation is done by using labels and closures.
-* You can update your workflow definition **while it is running**. Workflow state & definition are stored separately.
-* You can have multiple threads in single workflow and orchestrate them. 
-* You can test your workflows via unit-tests.
-
-
-### Google Run & Google Cloud Tasks 
-By using Google Cloud Run & Google Cloud Tasks & Google Datastore it's possible to have fully serverless workflow setup.
-This provides all the benefits of serverless applications and at the same time solves issues related to concurrent execution.
-Example setup using this stack: https://github.com/gorchestrate/pizzaapp
 
 
 ### How library knows where to resume the workflow from?
