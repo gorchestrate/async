@@ -555,3 +555,53 @@ func TestWait(t *testing.T) {
 	require.Equal(t, WorkflowFinished, wf.Meta.Status)
 	require.Len(t, wf.Meta.Threads, 0)
 }
+
+type TestSubWorkflow struct {
+	Meta State
+	Log  string
+}
+
+func (t *TestSubWorkflow) Definition() Section {
+	return S(
+		Step("step1", func() error {
+			t.Log += "1"
+			return nil
+		}),
+		t.SubWorkflow1("sub1_"),
+		t.SubWorkflow1("sub1,2_"),
+	)
+}
+
+func (t *TestSubWorkflow) SubWorkflow1(prefix string) Section {
+	return S(
+		Step(prefix+"_step2", func() error {
+			t.Log += "2"
+			return nil
+		}),
+		t.SubWorkflow2(prefix+"_sub2,1_"),
+		t.SubWorkflow2(prefix+"_sub2,2_"),
+	)
+}
+
+func (t *TestSubWorkflow) SubWorkflow2(prefix string) Section {
+	return S(
+		Step(prefix+"_step3", func() error {
+			t.Log += "3"
+			return nil
+		}),
+	)
+}
+
+func TestSub(t *testing.T) {
+	wf := TestSubWorkflow{
+		Meta: NewState("1", "empty"),
+	}
+	err := Resume(context.Background(), &wf, &wf.Meta, func(scheduleResume bool) error {
+		require.False(t, scheduleResume)
+		return nil
+	})
+	require.Nil(t, err)
+	require.Equal(t, WorkflowFinished, wf.Meta.Status)
+	require.Len(t, wf.Meta.Threads, 0)
+	require.Equal(t, "1233233", wf.Log)
+}

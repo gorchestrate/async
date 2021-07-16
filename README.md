@@ -1,6 +1,6 @@
-### **async** is a library, not a framework
+### gorchestrate your workflows
 
-It makes workflow management in Go incredibly easy, but requires you to specify how you lock,store & schedule your workflows.
+Gorchestrate makes stateful workflow management in Go incredibly easy. 
 
 I've spend 4 years to come up with this particular approach of handling workflows, and i'll apreciate if you'll try it out.
 
@@ -73,17 +73,24 @@ func (s *MyWorkflowState) Finish(output string) Stmt {
 ```
 
 ## Architecture
-Gorchestrate has stateless API. This allows framework to be adaptable to any infrastructure, including Serverless applications.
+Gorchestrate has stateless API and does not come with a database or scheduler. 
+It's intended to be integrated into applications, which will determine how & when workflows will be executed.
+
+Think this is a stateful scripting library - you want to execute some steps and want to save the state in persistent storage.
 
 Workflow is resumed(executed) by following events:
+* Scheduled call of Resume() method. It's scheduled right after workflow creation and event handling.
 * Explicit call of HandleEvent() method. It's called whenever some event happens.
-* Scheduled call of Resume() method. We schedule such after HandleEvent() method and after workflow creation.
 
-1. Resume() will execute workflow till point when workflow is blocked and waiting for events. 
+Brief description of how workflows are executed:
+0. Workflow is created and Resume() call is scheduled.
+1. Scheduled Resume() will execute workflow till point when workflow is blocked and waiting for events. 
 2. Then it will execute Setup() for all events we are waiting for. This allows you to register your events on external services.
 3. When event arrives - you pass it to HandleEvent() method. This handles event and schedules Resume() call
-4. When Resume() is called we execute Teardown() for all events we were waiting. This allows you to deregister your events on external services.
-5. If workflow is not finished - go back to point 1.
+4. Resume() will execute Teardown() for all events we were waiting for. This allows you to deregister your events on external services.
+5. Go to point 1 if main thread is not yet exited.
+
+
 
 
 #### Features
@@ -97,6 +104,12 @@ Workflow is resumed(executed) by following events:
 By using Google Cloud Run & Google Cloud Tasks & Google Datastore it's possible to have fully serverless workflow setup.
 This provides all the benefits of serverless applications and at the same time solves issues related to concurrent execution.
 Example setup using this stack: https://github.com/gorchestrate/pizzaapp
+
+
+### How library knows where to resume the workflow from?
+* All threads and their current steps are located in workflows State.
+* When Resume() is called - we try to continue all steps in all threads, from CurStep specified in thread. So if you add a new step to the workflow - it will not break the execution flow. Removing step is harder, since you need to make sure that the step is not currently executed and it's removal won't break the logic of your workflow.
+* When HandleEvent() is called - we find step waiting for this callback and continue execution. Calling HandleEvent() with event that workflow is not waiting for will return an error.
 
 ### Is it production ready?
 It will reliably work for straightforward workflows that are just doing simple steps. There's 80% coverage and tests are covering basic flows.
