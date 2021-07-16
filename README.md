@@ -12,39 +12,31 @@ type MyWorkflowState struct {
 	Error    string
 }
 
-func (s *MyWorkflowState) Definition() Section {
+func (s *MyWorkflow) Definition() Section {
 	return S(
 		Step("first action", func() error {
 			s.User = "You can execute arbitrary code right in the workflow definition"
 			log.Printf("No need for fancy definition/action separation")
 			return nil
 		}),
-		If(s.User == "", Step("second action", func() error {
-			log.Printf("use if/else to branch your workflow")
-			return nil
-		}),
+		If(s.User == "",
+			Step("second action", func() error {
+				log.Printf("use if/else to branch your workflow")
+				return nil
+			}),
 			Return(),
 		),
-		Wait("and then wait for some events",
-			On("wait some time", Timeout{
-				After: time.Minute * 10,
+		Select("and then wait for some events",
+			On("myEvent", MyEvent{
+				F: func() {
+					log.Printf("this is executed synchronously when HandleEvent() is Called")
+				},
 			},
 				Step("and then continue the workflow", func() error {
 					return nil
 				}),
 				s.Finish("timed out"),
 			),
-			On("or wait for your custom event", WaitForUserAction{
-				Message: "plz approve",
-				Approve: func() {
-					s.Approved = true
-					log.Printf("And handle it's results")
-				},
-				Deny: func(reason string) {
-					s.Approved = false
-					s.Error = reason
-				},
-			}),
 		),
 		Go("thread2", S(
 			Step("you can also run parallel threads in your workflow", func() error {
@@ -56,9 +48,9 @@ func (s *MyWorkflowState) Definition() Section {
 	)
 }
 
-func (s *MyWorkflowState) Finish(output string) Stmt {
+func (s *MyWorkflow) Finish(output string) Stmt {
 	return S(
-		Step("you can also build reusable workflows", func() error {
+		Step("you can also build sub steps for your workflows", func() error {
 			return nil
 		}),
 		Step("for example if you want to execute same actions for multiple workflow steps", func() error {

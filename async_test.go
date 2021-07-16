@@ -91,7 +91,7 @@ func (t DumbHandler) Setup(ctx context.Context, req CallbackRequest) (json.RawMe
 	return []byte(`{"a":"b"}`), nil
 }
 
-func (t DumbHandler) Teardown(ctx context.Context, req CallbackRequest) error {
+func (t DumbHandler) Teardown(ctx context.Context, req CallbackRequest, handled bool) error {
 	if !bytes.Equal([]byte(`{"a":"b"}`), req.SetupData) {
 		return fmt.Errorf("Setup Or Teardown issue")
 	}

@@ -312,7 +312,7 @@ type Handler interface {
 
 	Handle(ctx context.Context, req CallbackRequest, input interface{}) (interface{}, error)
 
-	Teardown(ctx context.Context, req CallbackRequest) error
+	Teardown(ctx context.Context, req CallbackRequest, handled bool) error
 }
 
 type WaitCond struct {

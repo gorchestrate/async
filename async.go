@@ -7,9 +7,10 @@ import (
 )
 
 type WaitEvent struct {
-	Req    CallbackRequest
-	Status WaitEventStatus
-	Error  string
+	Req     CallbackRequest
+	Status  WaitEventStatus
+	Handled bool
+	Error   string
 }
 
 type WaitEventStatus string
@@ -312,19 +313,6 @@ func resumeOnce(ctx context.Context, state WorkflowState, s *State) (found bool,
 	return false, nil
 }
 
-func (t *Thread) WaitingForCallback(cb CallbackRequest) error {
-	for _, evt := range t.WaitEvents {
-		if evt.Req.Name != cb.Name {
-			continue
-		}
-		if evt.Status == EventSetup || evt.Status == EventPendingSetup {
-			return nil
-		}
-		return fmt.Errorf("got callback on event with unexpected status: %v", evt.Status)
-	}
-	return fmt.Errorf("thead %v is not waiting for callback %v", t.ID, cb.Name)
-}
-
 type Checkpoint func(scheduleResume bool) error
 
 // Resume the workflow after
@@ -362,7 +350,7 @@ func Resume(ctx context.Context, wf WorkflowState, s *State, save Checkpoint) er
 				}
 				continue
 			}
-			err = h.Teardown(ctx, t.WaitEvents[i].Req)
+			err = h.Teardown(ctx, t.WaitEvents[i].Req, t.WaitEvents[i].Handled)
 			if err != nil {
 				t.WaitEvents[i].Status = EventTeardownError
 				t.WaitEvents[i].Error = err.Error()
@@ -450,32 +438,38 @@ func HandleCallback(ctx context.Context, req CallbackRequest, wf WorkflowState, 
 	if !ok {
 		return nil, fmt.Errorf("thread %v not found", req.ThreadID)
 	}
-
 	// In case our callback was waiting within a loop - we make sure that callback was waiting for specific event.
 	// If we don't care about this - we can use HandleEvent() function.
 	if req.PC != t.PC {
 		return nil, fmt.Errorf("callback PC mismatch: got %v, expected %v : request: %v ", req, req.PC, t.PC)
 	}
 
-	err := t.WaitingForCallback(req)
-	if err != nil {
-		return nil, err
+	for i, evt := range t.WaitEvents {
+		if evt.Req.Name != req.Name {
+			continue
+		}
+		if evt.Req.PC != req.PC {
+			return nil, fmt.Errorf("stored & supplied callback PC mismatch")
+		}
+		if evt.Status != EventSetup && evt.Status != EventPendingSetup {
+			return nil, fmt.Errorf("got callback on event with unexpected status: %v", evt.Status)
+		}
+		t.WaitEvents[i].Handled = true
+		rCtx := &ResumeContext{
+			ctx:           ctx,
+			s:             s,
+			t:             t,
+			Callback:      evt.Req,
+			CallbackInput: input,
+			Running:       false,
+		}
+		err := resumeState(rCtx, wf)
+		if err != nil {
+			return nil, err
+		}
+		return rCtx.CallbackOutput, save(true)
 	}
-
-	rCtx := &ResumeContext{
-		ctx:           ctx,
-		s:             s,
-		t:             t,
-		Callback:      req,
-		CallbackInput: input,
-		Running:       false,
-	}
-	err = resumeState(rCtx, wf)
-	if err != nil {
-		return nil, err
-	}
-	return rCtx.CallbackOutput, save(true)
-
+	return nil, fmt.Errorf("thead %v is not waiting for callback %v", t.ID, req.Name)
 }
 
 // HandleEvent is shortcut for calling HandleCallback() by event name.

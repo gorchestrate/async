@@ -20,10 +20,11 @@ func (s *MyWorkflow) Definition() Section {
 			log.Printf("No need for fancy definition/action separation")
 			return nil
 		}),
-		If(s.User == "", Step("second action", func() error {
-			log.Printf("use if/else to branch your workflow")
-			return nil
-		}),
+		If(s.User == "",
+			Step("second action", func() error {
+				log.Printf("use if/else to branch your workflow")
+				return nil
+			}),
 			Return(),
 		),
 		Select("and then wait for some events",
@@ -71,7 +72,7 @@ func (t MyEvent) Setup(ctx context.Context, req CallbackRequest) (json.RawMessag
 	return nil, nil
 }
 
-func (t MyEvent) Teardown(ctx context.Context, req CallbackRequest) error {
+func (t MyEvent) Teardown(ctx context.Context, req CallbackRequest, handled bool) error {
 	return nil
 }
 
