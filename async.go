@@ -170,24 +170,13 @@ func resumeState(ctx *ResumeContext, state WorkflowState) error {
 	if stop == nil && !ctx.Running {
 		return fmt.Errorf("callback not found: %#v", ctx)
 	}
+
 	// thread returned
 	if stop == nil || (stop != nil && stop.Return) {
 		ctx.s.Threads.Remove(ctx.t.ID)
 		if ctx.t.ID == MainThread {
 			ctx.s.Status = WorkflowFinished
 		}
-		return nil
-	}
-
-	// thread returned implicitly (all statements were finished)
-	if stop == nil && err == nil {
-		ctx.s.Threads.Remove(ctx.t.ID)
-		return nil
-	}
-
-	// thread has finished
-	if stop == nil && ctx.Running {
-		ctx.s.Threads.Remove(ctx.t.ID)
 		return nil
 	}
 

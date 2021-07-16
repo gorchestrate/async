@@ -20,7 +20,7 @@ type WorkflowState interface {
 // ResumeContext is used during workflow execution
 // It contains resume input as well as current state of the execution.
 type ResumeContext struct {
-	ctx context.Context
+	ctx context.Context `json:"-"`
 	s   *State
 	t   *Thread // current thread to resume
 
