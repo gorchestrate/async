@@ -605,3 +605,41 @@ func TestSub(t *testing.T) {
 	require.Len(t, wf.Meta.Threads, 0)
 	require.Equal(t, "1233233", wf.Log)
 }
+
+func BenchmarkXxx(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		wf := TestLoopWorkflow{
+			Meta: NewState("1", "empty"),
+		}
+		err := Resume(context.Background(), &wf, &wf.Meta, func(scheduleResume bool) error {
+			return nil
+		})
+		if err != nil {
+			b.FailNow()
+		}
+		_, err = HandleEvent(context.Background(), "event", &wf, &wf.Meta, nil, func(scheduleResume bool) error {
+			return nil
+		})
+		if err != nil {
+			b.FailNow()
+		}
+		err = Resume(context.Background(), &wf, &wf.Meta, func(scheduleResume bool) error {
+			return nil
+		})
+		if err != nil {
+			b.FailNow()
+		}
+		_, err = HandleEvent(context.Background(), "event", &wf, &wf.Meta, nil, func(scheduleResume bool) error {
+			return nil
+		})
+		if err != nil {
+			b.FailNow()
+		}
+		err = Resume(context.Background(), &wf, &wf.Meta, func(scheduleResume bool) error {
+			return nil
+		})
+		if err != nil {
+			b.FailNow()
+		}
+	}
+}

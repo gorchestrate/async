@@ -103,6 +103,17 @@ Example setup using this stack: https://github.com/gorchestrate/pizzaapp
 * When Resume() is called - we try to continue all steps in all threads, from CurStep specified in thread. So if you add a new step to the workflow - it will not break the execution flow. Removing step is harder, since you need to make sure that the step is not currently executed and it's removal won't break the logic of your workflow.
 * When HandleEvent() is called - we find step waiting for this callback and continue execution. Calling HandleEvent() with event that workflow is not waiting for will return an error.
 
+### What about performance?
+Performance is mainly limited by DB operations, rather than library itself.
+To build stateful workflows you have to lock, save & unlock the workflow for each execution step, which may be slow and resource-hungry.
+
+Here's a benchmark for a complete workflow execution consisting of 19 execution steps, including loops, steps & event handlers.
+```
+go test -bench=. -benchtime=1s
+cpu: AMD Ryzen 7 4700U with Radeon Graphics         
+BenchmarkXxx-8   	   33121	     35601 ns/op
+```
+
 ### Is it production ready?
 It will reliably work for straightforward workflows that are just doing simple steps. There's 80% coverage and tests are covering basic flows.
 
