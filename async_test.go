@@ -201,7 +201,7 @@ type TestLoopWorkflow struct {
 
 func (t *TestLoopWorkflow) Definition() Section {
 	return S(
-		For(t.I < 5,
+		For(t.I < 5, "loop",
 			Step("step1", func() error {
 				t.I++
 				t.Log += "l"
@@ -212,7 +212,7 @@ func (t *TestLoopWorkflow) Definition() Section {
 			t.I = 0
 			return nil
 		}),
-		For(t.I < 2,
+		For(t.I < 2, "loop2",
 			Wait("wait in loop for event",
 				On("event", DumbHandler{
 					F: func() {
@@ -289,7 +289,7 @@ type TestBreakWorkflow struct {
 
 func (t *TestBreakWorkflow) Definition() Section {
 	return S(
-		For(true,
+		For(true, "loop",
 			Step("step1", func() error {
 				t.I++
 				t.Log += "l"
@@ -301,7 +301,7 @@ func (t *TestBreakWorkflow) Definition() Section {
 			t.I = 0
 			return nil
 		}),
-		For(t.I < 2,
+		For(t.I < 2, "loop2",
 			Wait("wait in loop for event",
 				On("event", DumbHandler{
 					F: func() {
@@ -458,7 +458,7 @@ type TestGoWorkflow struct {
 
 func (t *TestGoWorkflow) Definition() Section {
 	return S(
-		For(t.I < 5,
+		For(t.I < 5, "loop",
 			Step("inc", func() error {
 				t.I++
 				t.WG++
@@ -520,7 +520,7 @@ type TestWaitWorkflow struct {
 
 func (t *TestWaitWorkflow) Definition() Section {
 	return S(
-		For(t.I < 5,
+		For(t.I < 5, "loop",
 			Step("inc", func() error {
 				t.I++
 				t.WG.Add(1)
