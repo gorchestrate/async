@@ -295,7 +295,7 @@ func (t *TestBreakWorkflow) Definition() Section {
 				t.Log += "l"
 				return nil
 			}),
-			If(t.I >= 5, Break()),
+			If(t.I >= 5, "check1", Break()),
 		),
 		Step("reset i", func() error {
 			t.I = 0
@@ -377,12 +377,12 @@ type TestIfElseWorkflow struct {
 
 func (t *TestIfElseWorkflow) Definition() Section {
 	return S(
-		If(t.Str == "",
+		If(t.Str == "", "check1",
 			Step("set to b", func() error {
 				t.Str = "b"
 				return nil
 			}),
-		).ElseIf(t.Str == "c",
+		).ElseIf(t.Str == "c", "check2",
 			Return(),
 		).Else(
 			Step("duplicate", func() error {
@@ -392,11 +392,11 @@ func (t *TestIfElseWorkflow) Definition() Section {
 			Return(),
 		),
 		Switch(
-			Case(t.Str == "a", Step("add a", func() error {
+			Case(t.Str == "a", "check3", Step("add a", func() error {
 				t.Str += "a"
 				return nil
 			})),
-			Case(t.Str == "b", S(
+			Case(t.Str == "b", "check4", S(
 				Step("add b", func() error {
 					t.Str += "b"
 					return nil

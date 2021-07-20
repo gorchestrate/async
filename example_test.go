@@ -20,7 +20,7 @@ func (s *MyWorkflow) Definition() Section {
 			log.Printf("No need for fancy definition/action separation")
 			return nil
 		}),
-		If(s.User == "",
+		If(s.User == "", "check1",
 			Step("second action", func() error {
 				log.Printf("use if/else to branch your workflow")
 				return nil

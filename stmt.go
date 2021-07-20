@@ -47,6 +47,16 @@ type Stop struct {
 // Section is similar to code block {} with a list of statements.
 type Section []Stmt
 
+func (s Section) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Type  string
+		Stmts []Stmt
+	}{
+		Type:  "section",
+		Stmts: s,
+	})
+}
+
 // S is a syntax sugar to properly indent statement sections when using gofmt
 func S(ss ...Stmt) Section {
 	return ss
@@ -77,7 +87,17 @@ func (s Section) Resume(ctx *resumeContext) (*Stop, error) {
 
 type StmtStep struct {
 	Name   string
-	Action func() error
+	Action func() error `json:"-"`
+}
+
+func (s StmtStep) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Type string
+		Name string
+	}{
+		Type: "step",
+		Name: s.Name,
+	})
 }
 
 func (s StmtStep) Resume(ctx *resumeContext) (*Stop, error) {
@@ -98,13 +118,35 @@ func Step(name string, action func() error) StmtStep {
 }
 
 type SwitchCase struct {
-	CondLabel string
-	Cond      bool
-	Stmt      Stmt
+	Name string
+	Cond bool
+	Stmt Stmt
+}
+
+func (s SwitchCase) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Type string
+		Name string
+		Stmt Stmt
+	}{
+		Type: "case",
+		Name: s.Name,
+		Stmt: s.Stmt,
+	})
 }
 
 type SwitchStmt struct {
 	Cases []SwitchCase
+}
+
+func (s SwitchStmt) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Type  string
+		Cases []SwitchCase
+	}{
+		Type:  "switch",
+		Cases: s.Cases,
+	})
 }
 
 // execute statements based on condition
@@ -140,18 +182,20 @@ func (s *SwitchStmt) Resume(ctx *resumeContext) (*Stop, error) {
 	return nil, nil
 }
 
-func If(cond bool, sec ...Stmt) *SwitchStmt {
+func If(cond bool, name string, sec ...Stmt) *SwitchStmt {
 	return &SwitchStmt{
 		Cases: []SwitchCase{{
 			Cond: cond,
+			Name: name,
 			Stmt: Section(sec),
 		}},
 	}
 }
 
-func (s *SwitchStmt) ElseIf(cond bool, sec ...Stmt) *SwitchStmt {
+func (s *SwitchStmt) ElseIf(cond bool, name string, sec ...Stmt) *SwitchStmt {
 	s.Cases = append(s.Cases, SwitchCase{
 		Cond: cond,
+		Name: name,
 		Stmt: Section(sec),
 	})
 	return s
@@ -165,41 +209,53 @@ func (s *SwitchStmt) Else(sec ...Stmt) *SwitchStmt {
 	return s
 }
 
-func Case(cond bool, sec Stmt) SwitchCase {
+func Case(cond bool, name string, sec Stmt) SwitchCase {
 	return SwitchCase{
 		Cond: cond,
+		Name: name,
 		Stmt: sec,
 	}
 }
 
 func Default(sec Stmt) SwitchCase {
 	return SwitchCase{
-		CondLabel: "default",
-		Cond:      true,
-		Stmt:      sec,
+		Name: "default",
+		Cond: true,
+		Stmt: sec,
 	}
 }
 
 type WaitCondStmt struct {
-	CondLabel string
-	Cond      bool
-	Handler   func() // executed when cond is true.
+	Name    string
+	Cond    bool
+	Handler func() `json:"-"` // executed when cond is true.
+}
+
+func (s WaitCondStmt) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Type string
+		Name string
+	}{
+		Type: "waitCond",
+		Name: s.Name,
+		// TODO: get handler json schema and put it here
+	})
 }
 
 // Wait statement wait for condition to be true.
 func WaitCond(cond bool, label string, handler func()) WaitCondStmt {
 	return WaitCondStmt{
-		Cond:      cond,
-		CondLabel: label,
-		Handler:   handler,
+		Cond:    cond,
+		Name:    label,
+		Handler: handler,
 	}
 }
 
 func (f WaitCondStmt) Resume(ctx *resumeContext) (*Stop, error) {
 	if ctx.Running && !f.Cond { // block only if cond == false
-		return &Stop{Cond: f.CondLabel}, nil
+		return &Stop{Cond: f.Name}, nil
 	}
-	if ctx.t.CurStep == f.CondLabel {
+	if ctx.t.CurStep == f.Name {
 		if !f.Cond {
 			return nil, fmt.Errorf("resuming waiting condition that is false")
 		}
@@ -209,9 +265,21 @@ func (f WaitCondStmt) Resume(ctx *resumeContext) (*Stop, error) {
 }
 
 type ForStmt struct {
-	CondLabel string
-	Cond      bool // nil cond for infinite loop
-	Stmt      Stmt
+	Name string
+	Cond bool // nil cond for infinite loop
+	Stmt Stmt
+}
+
+func (s ForStmt) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Type string
+		Name string
+		Stmt Stmt
+	}{
+		Type: "for",
+		Name: s.Name,
+		Stmt: s.Stmt,
+	})
 }
 
 func For(cond bool, ss ...Stmt) Stmt {
@@ -251,6 +319,18 @@ func (f ForStmt) Resume(ctx *resumeContext) (*Stop, error) {
 type WaitEventsStmt struct {
 	Name  string
 	Cases []Event
+}
+
+func (s WaitEventsStmt) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Type  string
+		Name  string
+		Cases []Event
+	}{
+		Type:  "waitEvent",
+		Name:  s.Name,
+		Cases: s.Cases,
+	})
 }
 
 // Wait for multiple events exclusively
@@ -321,6 +401,20 @@ type Event struct {
 	Stmt     Stmt
 }
 
+func (s Event) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Type    string
+		Name    string
+		Stmt    Stmt
+		Handler Handler
+	}{
+		Type:    "event",
+		Name:    s.Callback.Name,
+		Stmt:    s.Stmt,
+		Handler: s.Handler,
+	})
+}
+
 func On(event string, handler Handler, stmts ...Stmt) Event {
 	return Event{
 		Callback: CallbackRequest{
@@ -332,6 +426,14 @@ func On(event string, handler Handler, stmts ...Stmt) Event {
 }
 
 type BreakStmt struct {
+}
+
+func (s BreakStmt) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Type string
+	}{
+		Type: "break",
+	})
 }
 
 func (s BreakStmt) Resume(ctx *resumeContext) (*Stop, error) {
@@ -348,6 +450,14 @@ func Break() BreakStmt {
 }
 
 type ReturnStmt struct {
+}
+
+func (s ReturnStmt) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Type string
+	}{
+		Type: "return",
+	})
 }
 
 func (s ReturnStmt) Resume(ctx *resumeContext) (*Stop, error) {
@@ -367,9 +477,21 @@ func Return() ReturnStmt {
 type GoStmt struct {
 	// ID is needed to identify threads when there are many threads running with the same name.
 	// (for example they were created in a loop)
-	ID   func() string
+	ID   func() string `json:"-"`
 	Name string
 	Stmt Stmt
+}
+
+func (s GoStmt) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Type string
+		Name string
+		Stmt Stmt
+	}{
+		Type: "go",
+		Name: s.Name,
+		Stmt: s.Stmt,
+	})
 }
 
 func Go(name string, body Stmt) *GoStmt {
@@ -418,7 +540,7 @@ func FindWaitingStep(name string, sec Stmt) (WaitCondStmt, error) {
 	_, err := Walk(sec, func(s Stmt) bool {
 		switch x := s.(type) {
 		case WaitCondStmt:
-			if x.CondLabel == name {
+			if x.Name == name {
 				ret = x
 				return true
 			}

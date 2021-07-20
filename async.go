@@ -105,11 +105,11 @@ func Validate(s Section) error {
 			}
 			sections[x.Name] = true
 		case WaitCondStmt:
-			if sections[x.CondLabel] {
-				oErr = fmt.Errorf("duplicate wait step name: %v", x.CondLabel)
+			if sections[x.Name] {
+				oErr = fmt.Errorf("duplicate wait step name: %v", x.Name)
 				return true
 			}
-			sections[x.CondLabel] = true
+			sections[x.Name] = true
 		case WaitEventsStmt:
 			if sections[x.Name] {
 				oErr = fmt.Errorf("duplicate select name: %v", x.Name)
