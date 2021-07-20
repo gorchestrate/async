@@ -47,16 +47,6 @@ type Stop struct {
 // Section is similar to code block {} with a list of statements.
 type Section []Stmt
 
-func (s Section) MarshalJSON() ([]byte, error) {
-	return json.Marshal(struct {
-		Type  string
-		Stmts []Stmt
-	}{
-		Type:  "section",
-		Stmts: s,
-	})
-}
-
 // S is a syntax sugar to properly indent statement sections when using gofmt
 func S(ss ...Stmt) Section {
 	return ss
@@ -282,9 +272,10 @@ func (s ForStmt) MarshalJSON() ([]byte, error) {
 	})
 }
 
-func For(cond bool, ss ...Stmt) Stmt {
+func For(cond bool, name string, ss ...Stmt) Stmt {
 	return ForStmt{
 		Cond: cond,
+		Name: name,
 		Stmt: Section(ss),
 	}
 }
