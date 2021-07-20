@@ -111,7 +111,7 @@ func (t *TestHandlerWorkflow) Definition() Section {
 			t.Log += "start"
 			return nil
 		}),
-		Select("wait",
+		Wait("wait",
 			On("event", DumbHandler{
 				F: func() {
 					t.Log += ",sync"
@@ -213,7 +213,7 @@ func (t *TestLoopWorkflow) Definition() Section {
 			return nil
 		}),
 		For(t.I < 2,
-			Select("wait in loop for event",
+			Wait("wait in loop for event",
 				On("event", DumbHandler{
 					F: func() {
 						t.Log += "h"
@@ -302,7 +302,7 @@ func (t *TestBreakWorkflow) Definition() Section {
 			return nil
 		}),
 		For(t.I < 2,
-			Select("wait in loop for event",
+			Wait("wait in loop for event",
 				On("event", DumbHandler{
 					F: func() {
 						t.Log += "h"
@@ -401,7 +401,7 @@ func (t *TestIfElseWorkflow) Definition() Section {
 					t.Str += "b"
 					return nil
 				}),
-				Select("wait after b",
+				Wait("wait after b",
 					On("event", DumbHandler{F: func() {
 						t.Str += "h"
 					}}),
@@ -472,7 +472,7 @@ func (t *TestGoWorkflow) Definition() Section {
 				}),
 			)).WithID(func() string { return fmt.Sprint(t.I) }),
 		),
-		Select("wait for goroutines to finish",
+		Wait("wait for goroutines to finish",
 			On("event", DumbHandler{}),
 		),
 		Step("done", func() error {

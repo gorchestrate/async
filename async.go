@@ -92,6 +92,7 @@ func (tt *Threads) Find(id string) (*Thread, bool) {
 	return nil, false
 }
 
+// TODO: more robust validations
 func Validate(s Section) error {
 	var oErr error
 	sections := map[string]bool{}
@@ -103,13 +104,13 @@ func Validate(s Section) error {
 				return true
 			}
 			sections[x.Name] = true
-		case WaitStmt:
+		case WaitCondStmt:
 			if sections[x.CondLabel] {
 				oErr = fmt.Errorf("duplicate wait step name: %v", x.CondLabel)
 				return true
 			}
 			sections[x.CondLabel] = true
-		case SelectStmt:
+		case WaitEventsStmt:
 			if sections[x.Name] {
 				oErr = fmt.Errorf("duplicate select name: %v", x.Name)
 				return true
@@ -194,9 +195,9 @@ func resumeState(ctx *resumeContext, state WorkflowState) error {
 		return nil
 	}
 
-	// waiting for event
-	ctx.t.CurStep = stop.Select.Name
-	for _, c := range stop.Select.Cases {
+	// waiting for events
+	ctx.t.CurStep = stop.WaitEvents.Name
+	for _, c := range stop.WaitEvents.Cases {
 		c.Callback.PC = ctx.t.PC
 		c.Callback.WorkflowID = ctx.s.ID
 		c.Callback.ThreadID = ctx.t.ID

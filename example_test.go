@@ -27,7 +27,7 @@ func (s *MyWorkflow) Definition() Section {
 			}),
 			Return(),
 		),
-		Select("and then wait for some events",
+		Wait("and then wait for some events",
 			On("myEvent", MyEvent{
 				F: func() {
 					log.Printf("this is executed synchronously when HandleEvent() is Called")

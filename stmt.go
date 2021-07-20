@@ -38,10 +38,10 @@ type resumeContext struct {
 
 // Stop tells us that syncronous part of the workflow has finished. It means we either:
 type Stop struct {
-	Step   string      // execute step
-	Select *SelectStmt // wait for Events
-	Return bool        // stop this thread
-	Cond   string      // wait for cond
+	Step       string          // execute step
+	WaitEvents *WaitEventsStmt // wait for Events
+	Return     bool            // stop this thread
+	Cond       string          // wait for cond
 }
 
 // Section is similar to code block {} with a list of statements.
@@ -180,22 +180,22 @@ func Default(sec Stmt) SwitchCase {
 	}
 }
 
-type WaitStmt struct {
+type WaitCondStmt struct {
 	CondLabel string
 	Cond      bool
 	Handler   func() // executed when cond is true.
 }
 
 // Wait statement wait for condition to be true.
-func Wait(cond bool, label string, handler func()) WaitStmt {
-	return WaitStmt{
+func WaitCond(cond bool, label string, handler func()) WaitCondStmt {
+	return WaitCondStmt{
 		Cond:      cond,
 		CondLabel: label,
 		Handler:   handler,
 	}
 }
 
-func (f WaitStmt) Resume(ctx *resumeContext) (*Stop, error) {
+func (f WaitCondStmt) Resume(ctx *resumeContext) (*Stop, error) {
 	if ctx.Running && !f.Cond { // block only if cond == false
 		return &Stop{Cond: f.CondLabel}, nil
 	}
@@ -248,14 +248,14 @@ func (f ForStmt) Resume(ctx *resumeContext) (*Stop, error) {
 	return nil, nil
 }
 
-type SelectStmt struct {
+type WaitEventsStmt struct {
 	Name  string
-	Cases []WaitCond
+	Cases []Event
 }
 
-// Select for multiple conditions and execute only one
-func Select(name string, ss ...WaitCond) SelectStmt {
-	return SelectStmt{
+// Wait for multiple events exclusively
+func Wait(name string, ss ...Event) WaitEventsStmt {
+	return WaitEventsStmt{
 		Name:  name,
 		Cases: ss,
 	}
@@ -268,9 +268,9 @@ func safeResume(ctx *resumeContext, s Stmt) (*Stop, error) {
 	return s.Resume(ctx)
 }
 
-func (s SelectStmt) Resume(ctx *resumeContext) (*Stop, error) {
+func (s WaitEventsStmt) Resume(ctx *resumeContext) (*Stop, error) {
 	if ctx.Running {
-		return &Stop{Select: &s}, nil
+		return &Stop{WaitEvents: &s}, nil
 	}
 
 	if s.Name == ctx.t.CurStep {
@@ -315,14 +315,14 @@ type Handler interface {
 	Teardown(ctx context.Context, req CallbackRequest, handled bool) error
 }
 
-type WaitCond struct {
+type Event struct {
 	Callback CallbackRequest
 	Handler  Handler
 	Stmt     Stmt
 }
 
-func On(event string, handler Handler, stmts ...Stmt) WaitCond {
-	return WaitCond{
+func On(event string, handler Handler, stmts ...Stmt) Event {
+	return Event{
 		Callback: CallbackRequest{
 			Name: event,
 		},
@@ -413,11 +413,11 @@ func FindStep(name string, sec Stmt) (*StmtStep, error) {
 	return &ret, err
 }
 
-func FindWaitingStep(name string, sec Stmt) (WaitStmt, error) {
-	var ret WaitStmt
+func FindWaitingStep(name string, sec Stmt) (WaitCondStmt, error) {
+	var ret WaitCondStmt
 	_, err := Walk(sec, func(s Stmt) bool {
 		switch x := s.(type) {
-		case WaitStmt:
+		case WaitCondStmt:
 			if x.CondLabel == name {
 				ret = x
 				return true
@@ -441,9 +441,9 @@ func Walk(s Stmt, f func(s Stmt) bool) (bool, error) {
 		return false, nil
 	case StmtStep:
 		return false, nil
-	case WaitStmt:
+	case WaitCondStmt:
 		return false, nil
-	case SelectStmt:
+	case WaitEventsStmt:
 		for _, v := range x.Cases {
 			stop, err := Walk(v.Stmt, f)
 			if err != nil || stop {
@@ -484,7 +484,7 @@ func FindHandler(req CallbackRequest, sec Stmt) (Handler, error) {
 	var ret Handler
 	_, err := Walk(sec, func(s Stmt) bool {
 		switch x := s.(type) {
-		case SelectStmt:
+		case WaitEventsStmt:
 			for _, v := range x.Cases {
 				if v.Callback.Name == req.Name {
 					ret = v.Handler

@@ -13,5 +13,5 @@ func (wg *WG) Done() {
 }
 
 func (wg *WG) Wait(label string) Stmt {
-	return Wait(wg.I == 0, label, nil)
+	return WaitCond(wg.I == 0, label, nil)
 }
