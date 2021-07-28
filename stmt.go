@@ -355,7 +355,7 @@ func (s WaitEventsStmt) Resume(ctx *resumeContext) (*Stop, error) {
 }
 
 type Handler interface {
-	Setup(ctx context.Context, req CallbackRequest) (json.RawMessage, error)
+	Setup(ctx context.Context, req CallbackRequest) (string, error)
 
 	Handle(ctx context.Context, req CallbackRequest, input interface{}) (interface{}, error)
 

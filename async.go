@@ -2,7 +2,6 @@ package async
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 )
 
@@ -214,7 +213,7 @@ type CallbackRequest struct {
 	ThreadID   string
 	Name       string
 	PC         int
-	SetupData  json.RawMessage
+	SetupData  string
 }
 
 func NewState(id, name string) State {
