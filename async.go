@@ -39,13 +39,15 @@ const (
 )
 
 type Thread struct {
-	ID         string
-	Name       string
-	Status     ThreadStatus // current status
-	CurStep    string       // current step
-	WaitEvents []WaitEvent  // waiting for Select() stmt conditions
-	Break      bool
-	PC         int
+	ID          string
+	Name        string
+	Status      ThreadStatus // current status
+	CurStep     string       // current step
+	CurCallback string
+	WaitEvents  []WaitEvent // waiting for Select() stmt conditions
+	Break       bool
+	Continue    bool
+	PC          int
 }
 
 const MainThread = "_main_"
@@ -262,7 +264,7 @@ func resumeOnce(ctx context.Context, state WorkflowState, s *State) (found bool,
 				t:       t,
 				Running: false,
 			}
-			err := resumeState(rCtx, state)
+			err = resumeState(rCtx, state)
 			if err != nil {
 				return true, err
 			}
@@ -312,6 +314,7 @@ type Checkpoint func(scheduleResume bool) error
 //
 // This method can be called multiple times. If there's nothing to resume - it will return 'nil'
 func Resume(ctx context.Context, wf WorkflowState, s *State, save Checkpoint) error {
+	s.PC++
 	if s.Status == WorkflowFinished {
 		return nil
 	}
@@ -350,7 +353,7 @@ func Resume(ctx context.Context, wf WorkflowState, s *State, save Checkpoint) er
 				}
 				continue
 			}
-			t.WaitEvents = append(t.WaitEvents[:i], t.WaitEvents[i+1:]...) // remove successful teardown
+			t.WaitEvents = append(t.WaitEvents[:i], t.WaitEvents[i+1:]...)
 			i--
 			err = save(false)
 			if err != nil {
@@ -367,6 +370,7 @@ func Resume(ctx context.Context, wf WorkflowState, s *State, save Checkpoint) er
 		if !found {
 			break
 		}
+		// TODO: we should only save after execution step & setup/teardown. (otherwise we will log too much events)
 		err = save(false)
 		if err != nil {
 			return err
@@ -420,7 +424,8 @@ func Resume(ctx context.Context, wf WorkflowState, s *State, save Checkpoint) er
 	return nil
 }
 
-func HandleCallback(ctx context.Context, req CallbackRequest, wf WorkflowState, s *State, input interface{}, save Checkpoint) (interface{}, error) {
+func HandleCallback(ctx context.Context, req CallbackRequest, wf WorkflowState, s *State, input interface{}) (interface{}, error) {
+	s.PC++
 	if s.Status != WorkflowRunning {
 		return nil, fmt.Errorf("received callback on workflow that is not running: %v", s.Status)
 	}
@@ -444,20 +449,24 @@ func HandleCallback(ctx context.Context, req CallbackRequest, wf WorkflowState, 
 		if evt.Status != EventSetup && evt.Status != EventPendingSetup {
 			return nil, fmt.Errorf("got callback on event with unexpected status: %v", evt.Status)
 		}
-		t.WaitEvents[i].Handled = true
-		rCtx := &resumeContext{
-			ctx:           ctx,
-			s:             s,
-			t:             t,
-			Callback:      evt.Req,
-			CallbackInput: input,
-			Running:       false,
-		}
-		err := resumeState(rCtx, wf)
+		h, err := FindHandler(req, wf.Definition())
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("callback not found")
 		}
-		return rCtx.CallbackOutput, save(true)
+		out, err := h.Handle(ctx, req, input)
+		if err != nil {
+			return nil, fmt.Errorf("handle err: %v", err)
+		}
+		t.WaitEvents[i].Handled = true
+		t.CurCallback = req.Name
+		for i, evt := range t.WaitEvents {
+			if evt.Status == EventSetup {
+				t.WaitEvents[i].Status = EventPendingTeardown
+			}
+		}
+		t.Status = ThreadResuming
+		t.PC++
+		return out, nil
 	}
 	return nil, fmt.Errorf("thead %v is not waiting for callback %v", t.ID, req.Name)
 }
@@ -467,7 +476,7 @@ func HandleCallback(ctx context.Context, req CallbackRequest, wf WorkflowState, 
 // Also, if you're waiting for event in a loop - event handlers from previous iterations could arrive late and trigger
 // events for future iterations.
 // For better control over which event will be called back - you should use OnCallback() instead and specify PC & Thread explicitly.
-func HandleEvent(ctx context.Context, name string, wf WorkflowState, s *State, input interface{}, save Checkpoint) (interface{}, error) {
+func HandleEvent(ctx context.Context, name string, wf WorkflowState, s *State, input interface{}) (interface{}, error) {
 	var req CallbackRequest
 	for _, tr := range s.Threads {
 		for _, e := range tr.WaitEvents {
@@ -479,5 +488,5 @@ func HandleEvent(ctx context.Context, name string, wf WorkflowState, s *State, i
 	if req.Name == "" {
 		return nil, fmt.Errorf("event %v not found", name)
 	}
-	return HandleCallback(ctx, req, wf, s, input, save)
+	return HandleCallback(ctx, req, wf, s, input)
 }

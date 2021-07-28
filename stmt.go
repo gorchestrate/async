@@ -27,13 +27,7 @@ type resumeContext struct {
 	// Running means process is already resumed and we are executing statements.
 	// process is not running - we are searching for the step we should resume from.
 	Running bool
-
-	// In case workflow is resumed by a callback
-	Callback       CallbackRequest
-	CallbackInput  interface{}
-	CallbackOutput interface{}
-
-	Return bool
+	Return  bool
 }
 
 // Stop tells us that syncronous part of the workflow has finished. It means we either:
@@ -233,7 +227,7 @@ func (s WaitCondStmt) MarshalJSON() ([]byte, error) {
 }
 
 // Wait statement wait for condition to be true.
-func WaitCond(cond bool, label string, handler func()) WaitCondStmt {
+func WaitFor(label string, cond bool, handler func()) WaitCondStmt {
 	return WaitCondStmt{
 		Cond:    cond,
 		Name:    label,
@@ -255,34 +249,34 @@ func (f WaitCondStmt) Resume(ctx *resumeContext) (*Stop, error) {
 }
 
 type ForStmt struct {
-	Name string
-	Cond bool // nil cond for infinite loop
-	Stmt Stmt
+	Name    string
+	Cond    bool // nil cond for infinite loop
+	Section Section
 }
 
 func (s ForStmt) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
-		Type string
-		Name string
-		Stmt Stmt
+		Type    string
+		Name    string
+		Section Section
 	}{
-		Type: "for",
-		Name: s.Name,
-		Stmt: s.Stmt,
+		Type:    "for",
+		Name:    s.Name,
+		Section: s.Section,
 	})
 }
 
-func For(cond bool, name string, ss ...Stmt) Stmt {
+func For(name string, cond bool, ss ...Stmt) Stmt {
 	return ForStmt{
-		Cond: cond,
-		Name: name,
-		Stmt: Section(ss),
+		Cond:    cond,
+		Name:    name,
+		Section: Section(ss),
 	}
 }
 
 func (f ForStmt) Resume(ctx *resumeContext) (*Stop, error) {
 	if !ctx.Running {
-		b, err := f.Stmt.Resume(ctx)
+		b, err := f.Section.Resume(ctx)
 		if err != nil || b != nil {
 			return b, err
 		}
@@ -298,7 +292,7 @@ func (f ForStmt) Resume(ctx *resumeContext) (*Stop, error) {
 			return nil, nil
 		}
 
-		b, err := f.Stmt.Resume(ctx)
+		b, err := f.Section.Resume(ctx)
 		if err != nil || b != nil {
 			return b, err
 		}
@@ -343,31 +337,13 @@ func (s WaitEventsStmt) Resume(ctx *resumeContext) (*Stop, error) {
 	if ctx.Running {
 		return &Stop{WaitEvents: &s}, nil
 	}
-
-	if s.Name == ctx.t.CurStep {
-		ctx.Running = true
-		for i, evt := range ctx.t.WaitEvents {
-			if evt.Status == EventSetup {
-				ctx.t.WaitEvents[i].Status = EventPendingTeardown
-			}
+	for _, c := range s.Cases {
+		if s.Name == ctx.t.CurStep && c.Callback.Name == ctx.t.CurCallback {
+			ctx.Running = true
+			ctx.t.CurCallback = ""
+			return safeResume(ctx, c.Stmt)
 		}
-		for _, c := range s.Cases {
-			if c.Callback.Name == ctx.Callback.Name {
-				if c.Handler != nil {
-					out, err := c.Handler.Handle(ctx.ctx, ctx.Callback, ctx.CallbackInput)
-					if err != nil {
-						return nil, err
-					}
-					ctx.CallbackOutput = out
-				}
-				return safeResume(ctx, c.Stmt)
-			}
-		}
-		return nil, fmt.Errorf("callback %v for case %v  not found", ctx.Callback.Name, ctx.t.CurStep)
-	}
-
-	for _, v := range s.Cases {
-		b, err := safeResume(ctx, v.Stmt)
+		b, err := safeResume(ctx, c.Stmt)
 		if err != nil || b != nil {
 			return b, err
 		}
@@ -438,6 +414,30 @@ func (s BreakStmt) Resume(ctx *resumeContext) (*Stop, error) {
 // Break for loop
 func Break() BreakStmt {
 	return BreakStmt{}
+}
+
+type ContinueStmt struct {
+}
+
+func (s ContinueStmt) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Type string
+	}{
+		Type: "break",
+	})
+}
+
+func (s ContinueStmt) Resume(ctx *resumeContext) (*Stop, error) {
+	if !ctx.Running {
+		return nil, nil
+	}
+	ctx.t.Continue = true
+	return nil, nil
+}
+
+// Continue for loop
+func Continue() ContinueStmt {
+	return ContinueStmt{}
 }
 
 type ReturnStmt struct {
@@ -552,6 +552,8 @@ func Walk(s Stmt, f func(s Stmt) bool) (bool, error) {
 		return false, nil
 	case BreakStmt:
 		return false, nil
+	case ContinueStmt:
+		return false, nil
 	case StmtStep:
 		return false, nil
 	case WaitCondStmt:
@@ -569,7 +571,7 @@ func Walk(s Stmt, f func(s Stmt) bool) (bool, error) {
 			return stop, err
 		}
 	case ForStmt:
-		stop, err := Walk(x.Stmt, f)
+		stop, err := Walk(x.Section, f)
 		if err != nil || stop {
 			return stop, err
 		}

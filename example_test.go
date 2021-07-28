@@ -92,7 +92,7 @@ func Example() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	_, err = HandleEvent(context.Background(), "myEvent", &wf, &wf.State, nil, func(scheduleResume bool) error {
+	_, err = HandleEvent(context.Background(), "myEvent", &wf, &wf.State, func(scheduleResume bool) error {
 		// this is callback to schedule another Resume() call and save updated &wf to persistent storage
 		return nil
 	})
