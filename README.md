@@ -1,7 +1,7 @@
 ### gorchestrate your workflows
+![link to docs](https://avatars.githubusercontent.com/u/73880988?s=200&u=4836092ec2bbec14ecd6597f41d4e69c9061309f&v=1)
 
 Gorchestrate makes stateful workflow management in Go incredibly easy. 
-
 I've spend 4 years to come up with this particular approach of handling workflows, and i'll apreciate if you'll try it out.
 
 

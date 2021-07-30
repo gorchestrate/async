@@ -237,7 +237,11 @@ func WaitFor(label string, cond bool, handler func()) WaitCondStmt {
 }
 
 func (f WaitCondStmt) Resume(ctx *resumeContext) (*Stop, error) {
-	if ctx.Running && !f.Cond { // block only if cond == false
+	if ctx.Running && f.Cond {
+		f.Handler() // if condition is already met - execute handler immediately
+		return nil, nil
+	}
+	if ctx.Running && !f.Cond { // if condition is false - let's wait for it
 		return &Stop{Cond: f.Name}, nil
 	}
 	if ctx.t.CurStep == f.Name {
