@@ -2,7 +2,6 @@ package async
 
 import (
 	"context"
-	"encoding/json"
 	"log"
 )
 
@@ -68,8 +67,8 @@ type MyEvent struct {
 	F func()
 }
 
-func (t MyEvent) Setup(ctx context.Context, req CallbackRequest) (json.RawMessage, error) {
-	return nil, nil
+func (t MyEvent) Setup(ctx context.Context, req CallbackRequest) (string, error) {
+	return "", nil
 }
 
 func (t MyEvent) Teardown(ctx context.Context, req CallbackRequest, handled bool) error {

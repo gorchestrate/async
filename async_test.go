@@ -1,9 +1,7 @@
 package async
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"testing"
 
@@ -86,12 +84,12 @@ type DumbHandler struct {
 	F func()
 }
 
-func (t DumbHandler) Setup(ctx context.Context, req CallbackRequest) (json.RawMessage, error) {
-	return []byte(`{"a":"b"}`), nil
+func (t DumbHandler) Setup(ctx context.Context, req CallbackRequest) (string, error) {
+	return "abc", nil
 }
 
 func (t DumbHandler) Teardown(ctx context.Context, req CallbackRequest, handled bool) error {
-	if !bytes.Equal([]byte(`{"a":"b"}`), req.SetupData) {
+	if req.SetupData != "abc" {
 		return fmt.Errorf("Setup Or Teardown issue")
 	}
 	return nil
@@ -145,7 +143,7 @@ func TestHandler(t *testing.T) {
 	require.Equal(t, EventSetup, tr.WaitEvents[0].Status)
 	require.Equal(t, "event", tr.WaitEvents[0].Req.Name)
 	require.Equal(t, 3, tr.WaitEvents[0].Req.PC)
-	require.Equal(t, json.RawMessage(`{"a":"b"}`), tr.WaitEvents[0].Req.SetupData)
+	require.Equal(t, "abc", tr.WaitEvents[0].Req.SetupData)
 	require.Equal(t, EventSetup, tr.WaitEvents[0].Status)
 	require.Equal(t, MainThread, tr.WaitEvents[0].Req.ThreadID)
 	require.Equal(t, "1", tr.WaitEvents[0].Req.WorkflowID)

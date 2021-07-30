@@ -94,6 +94,7 @@ func (s StmtStep) Resume(ctx *resumeContext) (*Stop, error) {
 	return nil, nil
 }
 
+// if action func returns error - step will be retried automatically.
 func Step(name string, action func() error) StmtStep {
 	return StmtStep{
 		Name:   name,
