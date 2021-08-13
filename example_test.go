@@ -84,10 +84,7 @@ func Example() {
 	wf := MyWorkflow{
 		State: NewState("1", "empty"),
 	}
-	err := Resume(context.Background(), &wf, &wf.State, func(scheduleResume bool) error {
-		// this is callback to save updated &wf to persistent storage
-		return nil
-	})
+	_, err := Resume(context.Background(), &wf, &wf.State)
 	if err != nil {
 		log.Fatal(err)
 	}

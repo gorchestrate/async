@@ -21,7 +21,7 @@ func TestEmpty(t *testing.T) {
 		Meta: NewState("1", "empty"),
 	}
 	before := wf.Meta
-	err := Resume(context.Background(), &wf, &wf.Meta, func(scheduleResume bool) error {
+	_, err := ResumeWithSave(context.Background(), &wf, &wf.Meta, func() error {
 		return nil
 	})
 	require.Nil(t, err)
@@ -53,8 +53,7 @@ func TestStep(t *testing.T) {
 		Meta: NewState("1", "empty"),
 		Err:  "",
 	}
-	err := Resume(context.Background(), &wf, &wf.Meta, func(scheduleResume bool) error {
-		require.False(t, scheduleResume)
+	_, err := ResumeWithSave(context.Background(), &wf, &wf.Meta, func() error {
 		return nil
 	})
 	require.Nil(t, err)
@@ -67,8 +66,7 @@ func TestStep(t *testing.T) {
 		Meta: NewState("1", "empty"),
 		Err:  "err1",
 	}
-	err = Resume(context.Background(), &wf, &wf.Meta, func(scheduleResume bool) error {
-		require.False(t, scheduleResume)
+	_, err = ResumeWithSave(context.Background(), &wf, &wf.Meta, func() error {
 		return nil
 	})
 	require.NotNil(t, err)
@@ -124,12 +122,11 @@ func TestHandler(t *testing.T) {
 	wf := TestHandlerWorkflow{
 		Meta: NewState("1", "empty"),
 	}
-	err := Resume(context.Background(), &wf, &wf.Meta, func(scheduleResume bool) error {
-		require.False(t, scheduleResume)
+	_, err := ResumeWithSave(context.Background(), &wf, &wf.Meta, func() error {
 		return nil
 	})
 	require.Nil(t, err)
-	require.Equal(t, WorkflowRunning, wf.Meta.Status)
+	require.Equal(t, WorkflowResuming, wf.Meta.Status)
 	require.Len(t, wf.Meta.Threads, 1)
 	//require.Equal(t, 3, wf.Meta.PC) // we did 3 steps here: 1 to stop on Execution. 2 Execute, 3 Resume and stop on Handler
 	tr := wf.Meta.Threads[0]
@@ -150,7 +147,7 @@ func TestHandler(t *testing.T) {
 
 	before := wf
 	// if we call on event that doesn't exist - expect an error
-	_, err = HandleEvent(context.Background(), "blabla", &wf, &wf.Meta, func(scheduleResume bool) error {
+	_, err = HandleEvent(context.Background(), "blabla", &wf, &wf.Meta, func() error {
 		require.Fail(t, "should not call save on error")
 		return nil
 	})
@@ -162,11 +159,10 @@ func TestHandler(t *testing.T) {
 	require.Nil(t, err)
 	require.Equal(t, "abc", out)
 	require.Equal(t, "start,sync", wf.Log)
-	require.Equal(t, WorkflowRunning, wf.Meta.Status)
+	require.Equal(t, WorkflowResuming, wf.Meta.Status)
 	require.Equal(t, 4, tr.PC) // increase PC by 1 since handler was executed and resumed
 
-	err = Resume(context.Background(), &wf, &wf.Meta, func(scheduleResume bool) error {
-		require.False(t, scheduleResume)
+	_, err = ResumeWithSave(context.Background(), &wf, &wf.Meta, func() error {
 		return nil
 	})
 	require.Nil(t, err)
@@ -218,46 +214,41 @@ func TestLoop(t *testing.T) {
 	wf := TestLoopWorkflow{
 		Meta: NewState("1", "empty"),
 	}
-	err := Resume(context.Background(), &wf, &wf.Meta, func(scheduleResume bool) error {
-		require.False(t, scheduleResume)
+	_, err := ResumeWithSave(context.Background(), &wf, &wf.Meta, func() error {
 		return nil
 	})
 	require.Nil(t, err)
-	require.Equal(t, WorkflowRunning, wf.Meta.Status)
+	require.Equal(t, WorkflowResuming, wf.Meta.Status)
 	require.Len(t, wf.Meta.Threads, 1)
 	require.Len(t, wf.Meta.Threads[0].WaitEvents, 1)
 	require.Equal(t, ThreadWaitingEvent, wf.Meta.Threads[0].Status)
 	require.Equal(t, "lllll", wf.Log)
 
-	_, err = HandleEvent(context.Background(), "event", &wf, &wf.Meta, func(scheduleResume bool) error {
-		require.True(t, scheduleResume)
+	_, err = HandleEvent(context.Background(), "event", &wf, &wf.Meta, func() error {
 		return nil
 	})
 	require.Nil(t, err)
-	require.Equal(t, WorkflowRunning, wf.Meta.Status)
+	require.Equal(t, WorkflowResuming, wf.Meta.Status)
 	require.Equal(t, ThreadResuming, wf.Meta.Threads[0].Status)
 	require.Equal(t, "lllllh", wf.Log)
 
-	err = Resume(context.Background(), &wf, &wf.Meta, func(scheduleResume bool) error {
-		require.False(t, scheduleResume)
+	_, err = ResumeWithSave(context.Background(), &wf, &wf.Meta, func() error {
 		return nil
 	})
 	require.Nil(t, err)
-	require.Equal(t, WorkflowRunning, wf.Meta.Status)
+	require.Equal(t, WorkflowResuming, wf.Meta.Status)
 	require.Equal(t, ThreadWaitingEvent, wf.Meta.Threads[0].Status)
 	require.Equal(t, "lllllha", wf.Log)
 
-	_, err = HandleEvent(context.Background(), "event", &wf, &wf.Meta, func(scheduleResume bool) error {
-		require.True(t, scheduleResume)
+	_, err = HandleEvent(context.Background(), "event", &wf, &wf.Meta, func() error {
 		return nil
 	})
 	require.Nil(t, err)
-	require.Equal(t, WorkflowRunning, wf.Meta.Status)
+	require.Equal(t, WorkflowResuming, wf.Meta.Status)
 	require.Equal(t, ThreadResuming, wf.Meta.Threads[0].Status)
 	require.Equal(t, "lllllhah", wf.Log)
 
-	err = Resume(context.Background(), &wf, &wf.Meta, func(scheduleResume bool) error {
-		require.False(t, scheduleResume)
+	_, err = ResumeWithSave(context.Background(), &wf, &wf.Meta, func() error {
 		return nil
 	})
 	require.Nil(t, err)
@@ -307,46 +298,41 @@ func TestBreak(t *testing.T) {
 	wf := TestBreakWorkflow{
 		Meta: NewState("1", "empty"),
 	}
-	err := Resume(context.Background(), &wf, &wf.Meta, func(scheduleResume bool) error {
-		require.False(t, scheduleResume)
+	_, err := ResumeWithSave(context.Background(), &wf, &wf.Meta, func() error {
 		return nil
 	})
 	require.Nil(t, err)
-	require.Equal(t, WorkflowRunning, wf.Meta.Status)
+	require.Equal(t, WorkflowResuming, wf.Meta.Status)
 	require.Len(t, wf.Meta.Threads, 1)
 	require.Len(t, wf.Meta.Threads[0].WaitEvents, 1)
 	require.Equal(t, ThreadWaitingEvent, wf.Meta.Threads[0].Status)
 	require.Equal(t, "lllll", wf.Log)
 
-	_, err = HandleEvent(context.Background(), "event", &wf, &wf.Meta, func(scheduleResume bool) error {
-		require.True(t, scheduleResume)
+	_, err = HandleEvent(context.Background(), "event", &wf, &wf.Meta, func() error {
 		return nil
 	})
 	require.Nil(t, err)
-	require.Equal(t, WorkflowRunning, wf.Meta.Status)
+	require.Equal(t, WorkflowResuming, wf.Meta.Status)
 	require.Equal(t, ThreadResuming, wf.Meta.Threads[0].Status)
 	require.Equal(t, "lllllh", wf.Log)
 
-	err = Resume(context.Background(), &wf, &wf.Meta, func(scheduleResume bool) error {
-		require.False(t, scheduleResume)
+	_, err = ResumeWithSave(context.Background(), &wf, &wf.Meta, func() error {
 		return nil
 	})
 	require.Nil(t, err)
-	require.Equal(t, WorkflowRunning, wf.Meta.Status)
+	require.Equal(t, WorkflowResuming, wf.Meta.Status)
 	require.Equal(t, ThreadWaitingEvent, wf.Meta.Threads[0].Status)
 	require.Equal(t, "lllllha", wf.Log)
 
-	_, err = HandleEvent(context.Background(), "event", &wf, &wf.Meta, func(scheduleResume bool) error {
-		require.True(t, scheduleResume)
+	_, err = HandleEvent(context.Background(), "event", &wf, &wf.Meta, func() error {
 		return nil
 	})
 	require.Nil(t, err)
-	require.Equal(t, WorkflowRunning, wf.Meta.Status)
+	require.Equal(t, WorkflowResuming, wf.Meta.Status)
 	require.Equal(t, ThreadResuming, wf.Meta.Threads[0].Status)
 	require.Equal(t, "lllllhah", wf.Log)
 
-	err = Resume(context.Background(), &wf, &wf.Meta, func(scheduleResume bool) error {
-		require.False(t, scheduleResume)
+	_, err = ResumeWithSave(context.Background(), &wf, &wf.Meta, func() error {
 		return nil
 	})
 	require.Nil(t, err)
@@ -401,8 +387,7 @@ func TestIfElse(t *testing.T) {
 		Meta: NewState("1", "empty"),
 		Str:  "a",
 	}
-	err := Resume(context.Background(), &wf, &wf.Meta, func(scheduleResume bool) error {
-		require.False(t, scheduleResume)
+	_, err := ResumeWithSave(context.Background(), &wf, &wf.Meta, func() error {
 		return nil
 	})
 	require.Nil(t, err)
@@ -414,13 +399,12 @@ func TestIfElse(t *testing.T) {
 		Meta: NewState("1", "empty"),
 		Str:  "",
 	}
-	err = Resume(context.Background(), &wf, &wf.Meta, func(scheduleResume bool) error {
-		require.False(t, scheduleResume)
+	_, err = ResumeWithSave(context.Background(), &wf, &wf.Meta, func() error {
 		return nil
 	})
 	require.Nil(t, err)
 	require.Equal(t, "bb", wf.Str)
-	require.Equal(t, WorkflowRunning, wf.Meta.Status)
+	require.Equal(t, WorkflowResuming, wf.Meta.Status)
 	require.Equal(t, ThreadWaitingEvent, wf.Meta.Threads[0].Status)
 
 	_, err = HandleEvent(context.Background(), "event", &wf, &wf.Meta, "")
@@ -429,8 +413,7 @@ func TestIfElse(t *testing.T) {
 	require.Equal(t, ThreadResuming, wf.Meta.Threads[0].Status)
 	require.Len(t, wf.Meta.Threads, 1)
 
-	err = Resume(context.Background(), &wf, &wf.Meta, func(scheduleResume bool) error {
-		require.False(t, scheduleResume)
+	_, err = ResumeWithSave(context.Background(), &wf, &wf.Meta, func() error {
 		return nil
 	})
 	require.Nil(t, err)
@@ -476,23 +459,20 @@ func TestGo(t *testing.T) {
 	wf := TestGoWorkflow{
 		Meta: NewState("1", "empty"),
 	}
-	err := Resume(context.Background(), &wf, &wf.Meta, func(scheduleResume bool) error {
-		require.False(t, scheduleResume)
+	_, err := ResumeWithSave(context.Background(), &wf, &wf.Meta, func() error {
 		return nil
 	})
 	require.Nil(t, err)
 	require.Equal(t, "aaaaa", wf.Log)
-	require.Equal(t, WorkflowRunning, wf.Meta.Status)
+	require.Equal(t, WorkflowResuming, wf.Meta.Status)
 	require.Equal(t, ThreadWaitingEvent, wf.Meta.Threads[0].Status)
 
-	_, err = HandleEvent(context.Background(), "event", &wf, &wf.Meta, func(scheduleResume bool) error {
-		require.True(t, scheduleResume)
+	_, err = HandleEvent(context.Background(), "event", &wf, &wf.Meta, func() error {
 		return nil
 	})
 	require.Nil(t, err)
 
-	err = Resume(context.Background(), &wf, &wf.Meta, func(scheduleResume bool) error {
-		require.False(t, scheduleResume)
+	_, err = ResumeWithSave(context.Background(), &wf, &wf.Meta, func() error {
 		return nil
 	})
 	require.Nil(t, err)
@@ -536,8 +516,7 @@ func TestWait(t *testing.T) {
 	wf := TestWaitWorkflow{
 		Meta: NewState("1", "empty"),
 	}
-	err := Resume(context.Background(), &wf, &wf.Meta, func(scheduleResume bool) error {
-		require.False(t, scheduleResume)
+	_, err := ResumeWithSave(context.Background(), &wf, &wf.Meta, func() error {
 		return nil
 	})
 	require.Nil(t, err)
@@ -586,8 +565,7 @@ func TestSub(t *testing.T) {
 	wf := TestSubWorkflow{
 		Meta: NewState("1", "empty"),
 	}
-	err := Resume(context.Background(), &wf, &wf.Meta, func(scheduleResume bool) error {
-		require.False(t, scheduleResume)
+	_, err := ResumeWithSave(context.Background(), &wf, &wf.Meta, func() error {
 		return nil
 	})
 	require.Nil(t, err)
@@ -601,31 +579,31 @@ func BenchmarkXxx(b *testing.B) {
 		wf := TestLoopWorkflow{
 			Meta: NewState("1", "empty"),
 		}
-		err := Resume(context.Background(), &wf, &wf.Meta, func(scheduleResume bool) error {
+		_, err := ResumeWithSave(context.Background(), &wf, &wf.Meta, func() error {
 			return nil
 		})
 		if err != nil {
 			b.FailNow()
 		}
-		_, err = HandleEvent(context.Background(), "event", &wf, &wf.Meta, func(scheduleResume bool) error {
+		_, err = HandleEvent(context.Background(), "event", &wf, &wf.Meta, func() error {
 			return nil
 		})
 		if err != nil {
 			b.FailNow()
 		}
-		err = Resume(context.Background(), &wf, &wf.Meta, func(scheduleResume bool) error {
+		_, err = ResumeWithSave(context.Background(), &wf, &wf.Meta, func() error {
 			return nil
 		})
 		if err != nil {
 			b.FailNow()
 		}
-		_, err = HandleEvent(context.Background(), "event", &wf, &wf.Meta, func(scheduleResume bool) error {
+		_, err = HandleEvent(context.Background(), "event", &wf, &wf.Meta, func() error {
 			return nil
 		})
 		if err != nil {
 			b.FailNow()
 		}
-		err = Resume(context.Background(), &wf, &wf.Meta, func(scheduleResume bool) error {
+		_, err = ResumeWithSave(context.Background(), &wf, &wf.Meta, func() error {
 			return nil
 		})
 		if err != nil {
