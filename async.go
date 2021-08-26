@@ -371,6 +371,10 @@ func setup(ctx context.Context, wf WorkflowState, s *State, save Checkpoint) err
 	return nil
 }
 
+// Resume will continue workflow, executing steps in a process.
+// Resume may fail in the middle of the processing. To avoid data loss
+// and out-of-order duplicated step execution - save() will be called to
+// checkpoint current state of the workflow.
 func Resume(ctx context.Context, wf WorkflowState, s *State, save Checkpoint) error {
 	def := wf.Definition()
 	err := Validate(def)
@@ -436,6 +440,8 @@ loop:
 	return setup(ctx, wf, s, save)
 }
 
+// Handle incoming event. This func will only execute callback handler and update the state
+// After this function completes successfully - workflow should be resumed using Resume()
 func HandleCallback(ctx context.Context, req CallbackRequest, wf WorkflowState, s *State, input interface{}) (interface{}, error) {
 	def := wf.Definition()
 	err := Validate(def)
