@@ -12,6 +12,9 @@ type WaitEvent struct {
 	Error   string
 }
 
+// Event statuses are needed to make sure that the process of setting up,
+// tearing down and error handling do not interfere with each other.
+// So if setup or teardown of one event fails - we don't retry other events
 type WaitEventStatus string
 
 const (
@@ -145,10 +148,6 @@ func resumeState(ctx *resumeContext, state WorkflowState) error {
 		ctx.Running = true
 	}
 	def := state.Definition()
-	err := Validate(def)
-	if err != nil {
-		return err
-	}
 	resumeThread := Stmt(def)
 	// if we are resuming non-main thread - find it's definition in the AST
 	if ctx.t.Name != MainThread {
@@ -246,62 +245,32 @@ func (e ErrExec) Error() string {
 	return fmt.Sprintf("err during execution: %v", e.e)
 }
 
-func resumeOnce(ctx context.Context, state WorkflowState, s *State) (executed, found bool, err error) {
-	for _, t := range s.Threads {
-		switch t.Status {
-		case ThreadExecuting:
-			def := state.Definition()
-			err := Validate(def)
-			if err != nil {
-				return false, true, err
-			}
-			step, err := FindStep(t.CurStep, def)
-			if err != nil {
-				return false, false, fmt.Errorf("err finding step: %v", err)
-			}
-			if step == nil {
-				return false, false, fmt.Errorf("can't find step: %v", err)
-			}
-			err = step.Action()
-			if err != nil {
-				return false, true, ErrExec{e: err, Step: t.CurStep}
-			}
-			t.Status = ThreadResuming
-			t.PC++
-			s.PC++
-			return true, true, nil
-		case ThreadResuming:
-			rCtx := &resumeContext{
-				ctx:     ctx,
-				s:       s,
-				t:       t,
-				Running: false,
-			}
-			err = resumeState(rCtx, state)
-			if err != nil {
-				return false, true, err
-			}
-			return false, true, nil
-		case ThreadWaitingEvent:
-			// nothing needs to be done for thread waiting for event
-		case ThreadWaitingCondition:
-			// conditional thread should be executed last
-			// this gives consistency in parallel thread execution
-			// i.e. parallel threads are able to resume & finish resume execution after condition was met.
-		}
+func exec(ctx context.Context, state WorkflowState, t *Thread, s *State) error {
+	step, err := FindStep(t.CurStep, state.Definition())
+	if err != nil {
+		return fmt.Errorf("err finding step: %v", err)
 	}
+	if step == nil {
+		return fmt.Errorf("can't find step: %v", err)
+	}
+	err = step.Action()
+	if err != nil {
+		return ErrExec{e: err, Step: t.CurStep}
+	}
+	t.Status = ThreadResuming
+	t.PC++
+	s.PC++
+	return nil
+}
+
+func checkConditions(ctx context.Context, state WorkflowState, s *State) (bool, error) {
 	for _, t := range s.Threads {
 		switch t.Status {
 		case ThreadWaitingCondition:
 			// check if condition is met
-			def := state.Definition()
-			err := Validate(def)
+			s, err := FindWaitingStep(t.CurStep, state.Definition())
 			if err != nil {
-				return false, true, err
-			}
-			s, err := FindWaitingStep(t.CurStep, def)
-			if err != nil {
-				return false, true, err
+				return true, err
 			}
 			if s.Cond {
 				if s.Handler != nil {
@@ -310,200 +279,206 @@ func resumeOnce(ctx context.Context, state WorkflowState, s *State) (executed, f
 				// we should have syncronous handler to avoid concurrency issues.
 				// i.e. If condition was true, but then another thread resumes and it becomes false.
 				t.Status = ThreadResuming
-				return false, true, nil
+				return true, nil
 			}
 			continue
 		}
 	}
-	return false, false, nil
+	return false, nil
 }
 
-type Checkpoint func() error
+// Type of checkpoint event
+type CheckpointType string
 
-func Resume(ctx context.Context, wf WorkflowState, s *State) (bool, error) {
-	return ResumeWithSave(ctx, wf, s, func() error {
-		return nil
-	})
-}
+const (
+	// Step was executed successfully. You probably want to save your workflow after this event
+	CheckpointAfterStep      CheckpointType = "afterStep"
+	CheckpointAfterSetup     CheckpointType = "afterSetup"
+	CheckpointAfterTeardown  CheckpointType = "afterTeardown"
+	CheckpointAfterResume    CheckpointType = "afterResume"
+	CheckpointAfterCondition CheckpointType = "afterCondition"
+)
 
-// Resume the workflow after
-// - workflow creation
-// - successful callback handling
-// - previously failed Resume() call
-//
-// This method can be called multiple times. If there's nothing to resume - it will return 'nil'
-func ResumeWithSave(ctx context.Context, wf WorkflowState, s *State, save Checkpoint) (bool, error) {
-	s.PC++
-	executed := false
-	//before resuming workflow - make sure all previous teardowns are executed
+// Checkpoint is used to save workflow state while it's being processed
+// You may want to checkpoint/save your workflow only for specific checkpoint types
+// to increase performance and avoid unnecessary saves.
+type Checkpoint func(t CheckpointType) error
+
+func teardown(ctx context.Context, wf WorkflowState, s *State, save Checkpoint) error {
 	for _, t := range s.Threads {
 		for i := 0; i < len(t.WaitEvents); i++ {
 			if t.WaitEvents[i].Status != EventPendingTeardown {
 				continue
 			}
-			def := wf.Definition()
-			err := Validate(def)
+			h, err := FindHandler(t.WaitEvents[i].Req, wf.Definition())
 			if err != nil {
-				return executed, err
-			}
-			h, err := FindHandler(t.WaitEvents[i].Req, def)
-			if err != nil {
-				return executed, ErrExec{e: err, Step: t.CurStep}
-			}
-			if h == nil {
+				t.WaitEvents[i].Error = err.Error()
 				t.WaitEvents[i].Status = EventTeardownError
-				t.WaitEvents[i].Error = fmt.Sprintf("callback handler not found: %v", t.WaitEvents[i].Req.Name)
-				// err := save()
-				// if err != nil {
-				// 	return err
-				// }
 				continue
 			}
 			err = h.Teardown(ctx, t.WaitEvents[i].Req, t.WaitEvents[i].Handled)
 			if err != nil {
-				t.WaitEvents[i].Status = EventTeardownError
 				t.WaitEvents[i].Error = err.Error()
-				// err := save()
-				// if err != nil {
-				// 	return err
-				// }
+				t.WaitEvents[i].Status = EventTeardownError
 				continue
+			}
+			err = save(CheckpointAfterTeardown)
+			if err != nil {
+				return err
 			}
 			t.WaitEvents = append(t.WaitEvents[:i], t.WaitEvents[i+1:]...)
 			i--
-			executed = true
-			// err = save()
-			// if err != nil {
-			// 	return err
-			// }
 		}
 	}
+	// we don't return errors, since thread can continue execution and teardown can be retried later
+	return nil
+}
 
-	for i := 0; s.Status == WorkflowResuming; i++ {
-		executed, found, err := resumeOnce(ctx, wf, s)
-		if err != nil {
-			return executed, fmt.Errorf("err during resume: %w", err)
-		}
-		if !found {
-			break
-		}
-		// TODO: we should only save after execution step & setup/teardown. (otherwise we will log too much events)
-		err = save()
-		if err != nil {
-			return executed, err
-		}
-		if i > 1000 {
-			return executed, fmt.Errorf("resume didn't finish after 1000 steps")
-		}
-	}
-
+func setup(ctx context.Context, wf WorkflowState, s *State, save Checkpoint) error {
+	errs := []string{}
 	for _, t := range s.Threads {
 		for i := 0; i < len(t.WaitEvents); i++ {
 			if t.WaitEvents[i].Status != EventPendingSetup {
 				continue
 			}
-			def := wf.Definition()
-			err := Validate(def)
+			h, err := FindHandler(t.WaitEvents[i].Req, wf.Definition())
 			if err != nil {
-				return executed, err
-			}
-			h, err := FindHandler(t.WaitEvents[i].Req, def)
-			if err != nil {
-				return executed, fmt.Errorf("can' find handler: %v", err)
-			}
-			if h == nil {
+				t.WaitEvents[i].Error = err.Error()
 				t.WaitEvents[i].Status = EventSetupError
-				t.WaitEvents[i].Error = fmt.Sprintf("callback handler not found: %v", t.WaitEvents[i].Req.Name)
-				err := save()
-				if err != nil {
-					return executed, err
-				}
+				errs = append(errs, err.Error())
 				continue
 			}
 			d, err := h.Setup(ctx, t.WaitEvents[i].Req)
 			if err != nil {
-				t.WaitEvents[i].Status = EventSetupError
 				t.WaitEvents[i].Error = err.Error()
-				err := save()
-				if err != nil {
-					return executed, err
-				}
+				t.WaitEvents[i].Status = EventSetupError
+				errs = append(errs, err.Error())
 				continue
 			}
 			t.WaitEvents[i].Status = EventSetup
 			t.WaitEvents[i].Req.SetupData = d
-			err = save()
+			err = save(CheckpointAfterSetup)
 			if err != nil {
-				return executed, err
+				return err
 			}
 		}
 	}
-	return executed, nil
+	// we have to return error if any of events was not setup, because this may affect
+	// the workflow logic & correctness
+	if len(errs) > 0 {
+		return fmt.Errorf("errs during setup: %v", errs)
+	}
+	return nil
+}
+
+func Resume(ctx context.Context, wf WorkflowState, s *State, save Checkpoint) error {
+	def := wf.Definition()
+	err := Validate(def)
+	if err != nil {
+		return err
+	}
+	s.PC++
+
+	// make sure all previous teardowns are executed
+	err = teardown(ctx, wf, s, save)
+	if err != nil {
+		return nil
+	}
+
+loop:
+	for i := 0; s.Status == WorkflowResuming; i++ {
+		if i > 10000 {
+			return fmt.Errorf("resume didn't finish after 10000 steps")
+		}
+		for _, t := range s.Threads {
+			switch t.Status {
+			case ThreadExecuting:
+				err := exec(ctx, wf, t, s)
+				if err != nil {
+					return err
+				}
+				err = save(CheckpointAfterStep)
+				if err != nil {
+					return err
+				}
+				continue loop
+			case ThreadResuming:
+				err := resumeState(&resumeContext{
+					ctx:     ctx,
+					s:       s,
+					t:       t,
+					Running: false,
+				}, wf)
+				if err != nil {
+					return err
+				}
+				err = save(CheckpointAfterResume)
+				if err != nil {
+					return err
+				}
+				continue loop
+			}
+		}
+		found, err := checkConditions(ctx, wf, s)
+		if err != nil {
+			return err
+		}
+		if found {
+			err = save(CheckpointAfterCondition)
+			if err != nil {
+				return err
+			}
+			continue
+		}
+		break
+	}
+
+	return setup(ctx, wf, s, save)
 }
 
 func HandleCallback(ctx context.Context, req CallbackRequest, wf WorkflowState, s *State, input interface{}) (interface{}, error) {
+	def := wf.Definition()
+	err := Validate(def)
+	if err != nil {
+		return nil, err
+	}
 	s.PC++
 	if s.Status == WorkflowFinished {
 		return nil, fmt.Errorf("received callback on workflow that is finished: %v", s.Status)
 	}
-	t, ok := s.Threads.Find(req.ThreadID)
-	if !ok {
-		return nil, fmt.Errorf("thread %v not found", req.ThreadID)
-	}
-	// In case our callback was waiting within a loop - we make sure that callback was waiting for specific event.
-	// If we don't care about this - we can use HandleEvent() function.
-	if req.PC != t.PC {
-		return nil, fmt.Errorf("callback PC mismatch: got %v, expected %v : request: %v ", req, req.PC, t.PC)
-	}
-
-	for i, evt := range t.WaitEvents {
-		if evt.Req.Name != req.Name {
+	for _, t := range s.Threads {
+		if req.ThreadID != "" && req.ThreadID != t.ID {
 			continue
 		}
-		if evt.Req.PC != req.PC {
-			return nil, fmt.Errorf("stored & supplied callback PC mismatch")
-		}
-		if evt.Status != EventSetup && evt.Status != EventPendingSetup {
-			return nil, fmt.Errorf("got callback on event with unexpected status: %v", evt.Status)
-		}
-		h, err := FindHandler(req, wf.Definition())
-		if err != nil {
-			return nil, fmt.Errorf("callback not found")
-		}
-		out, err := h.Handle(ctx, req, input)
-		if err != nil {
-			return nil, fmt.Errorf("handle err: %w", err)
-		}
-		t.WaitEvents[i].Handled = true
-		t.CurCallback = req.Name
 		for i, evt := range t.WaitEvents {
-			if evt.Status == EventSetup {
-				t.WaitEvents[i].Status = EventPendingTeardown
+			if evt.Req.Name != req.Name {
+				continue
 			}
-		}
-		t.Status = ThreadResuming
-		t.PC++
-		return out, nil
-	}
-	return nil, fmt.Errorf("thead %v is not waiting for callback %v", t.ID, req.Name)
-}
-
-// HandleEvent is shortcut for calling HandleCallback() by event name.
-// Be careful - if you're using goroutines - there may be multiple events waiting with the same name.
-// Also, if you're waiting for event in a loop - event handlers from previous iterations could arrive late and trigger
-// events for future iterations.
-// For better control over which event will be called back - you should use OnCallback() instead and specify PC & Thread explicitly.
-func HandleEvent(ctx context.Context, name string, wf WorkflowState, s *State, input interface{}) (interface{}, error) {
-	var req CallbackRequest
-	for _, tr := range s.Threads {
-		for _, e := range tr.WaitEvents {
-			if e.Req.Name == name && (e.Status == EventPendingSetup || e.Status == EventSetup) {
-				req = e.Req
+			if req.PC != 0 && req.PC != evt.Req.PC {
+				return nil, fmt.Errorf("stored & supplied callback PC mismatch")
 			}
+			if evt.Status != EventSetup && evt.Status != EventPendingSetup {
+				return nil, fmt.Errorf("got callback on event with unexpected status: %v", evt.Status)
+			}
+			h, err := FindHandler(req, wf.Definition())
+			if err != nil {
+				return nil, fmt.Errorf("callback not found")
+			}
+			out, err := h.Handle(ctx, req, input)
+			if err != nil {
+				return nil, fmt.Errorf("handle err: %w", err)
+			}
+			t.WaitEvents[i].Handled = true
+			t.CurCallback = req.Name
+			for i, evt := range t.WaitEvents {
+				if evt.Status == EventSetup {
+					t.WaitEvents[i].Status = EventPendingTeardown
+				}
+			}
+			t.Status = ThreadResuming
+			t.PC++
+			return out, nil
 		}
 	}
-	if req.Name == "" {
-		return nil, fmt.Errorf("event %v not found", name)
-	}
-	return HandleCallback(ctx, req, wf, s, input)
+	return nil, fmt.Errorf("callback not found")
 }

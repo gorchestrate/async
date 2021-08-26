@@ -84,11 +84,13 @@ func Example() {
 	wf := MyWorkflow{
 		State: NewState("1", "empty"),
 	}
-	_, err := Resume(context.Background(), &wf, &wf.State)
+	err := Resume(context.Background(), &wf, &wf.State, func(ct CheckpointType) error {
+		return nil
+	})
 	if err != nil {
 		log.Fatal(err)
 	}
-	_, err = HandleEvent(context.Background(), "myEvent", &wf, &wf.State, func(scheduleResume bool) error {
+	_, err = HandleCallback(context.Background(), CallbackRequest{Name: "myEvent"}, &wf, &wf.State, func(scheduleResume bool) error {
 		// this is callback to schedule another Resume() call and save updated &wf to persistent storage
 		return nil
 	})

@@ -614,5 +614,8 @@ func FindHandler(req CallbackRequest, sec Stmt) (Handler, error) {
 		}
 		return false
 	})
+	if ret == nil {
+		return nil, fmt.Errorf("callback handler %v not found", req)
+	}
 	return ret, err
 }
