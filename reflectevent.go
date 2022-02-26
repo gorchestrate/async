@@ -15,7 +15,7 @@ func OnEvent(name string, h interface{}, stmts ...Stmt) Event {
 		Callback: CallbackRequest{
 			Name: name,
 		},
-		Handler: &ReflectEvent{
+		Handler: &ReflectHandler{
 			Handler: h,
 		},
 		Stmt: Section(stmts),
@@ -26,11 +26,11 @@ type Empty struct {
 }
 
 // This is an example of how to create your custom events
-type ReflectEvent struct {
+type ReflectHandler struct {
 	Handler interface{}
 }
 
-func (h ReflectEvent) inputSchema() ([]byte, error) {
+func (h ReflectHandler) inputSchema() ([]byte, error) {
 	fv := reflect.ValueOf(h.Handler)
 	ft := fv.Type()
 	if ft.NumIn() != 1 {
@@ -42,7 +42,7 @@ func (h ReflectEvent) inputSchema() ([]byte, error) {
 	return json.Marshal(jsonschema.ReflectFromType(ft.In(0)))
 }
 
-func (h ReflectEvent) Schemas() (in *jsonschema.Schema, out *jsonschema.Schema, err error) {
+func (h ReflectHandler) Schemas() (in *jsonschema.Schema, out *jsonschema.Schema, err error) {
 	fv := reflect.ValueOf(h.Handler)
 	ft := fv.Type()
 	if ft.NumOut() != 2 {
@@ -63,7 +63,7 @@ func (h ReflectEvent) Schemas() (in *jsonschema.Schema, out *jsonschema.Schema, 
 	return r.ReflectFromType(ft.In(0)), r.ReflectFromType(ft.Out(0)), nil
 }
 
-func (h ReflectEvent) MarshalJSON() ([]byte, error) {
+func (h ReflectHandler) MarshalJSON() ([]byte, error) {
 	fv := reflect.ValueOf(h.Handler)
 	ft := fv.Type()
 	if ft.NumIn() != 1 {
@@ -94,8 +94,14 @@ func (h ReflectEvent) MarshalJSON() ([]byte, error) {
 	})
 }
 
+const HandlerTypeReflect = "reflect"
+
+func (h *ReflectHandler) Type() string {
+	return HandlerTypeReflect
+}
+
 // code that will be executed when event is received
-func (h *ReflectEvent) Handle(ctx context.Context, req CallbackRequest, input interface{}) (interface{}, error) {
+func (h *ReflectHandler) Handle(ctx context.Context, req CallbackRequest, input interface{}) (interface{}, error) {
 	in, err := h.inputSchema()
 	if err != nil {
 		return nil, fmt.Errorf("input schema: %v", err)
@@ -144,13 +150,13 @@ func (h *ReflectEvent) Handle(ctx context.Context, req CallbackRequest, input in
 }
 
 // when we will start listening for this event - Setup() will be called for us to setup this event on external services
-func (t *ReflectEvent) Setup(ctx context.Context, req CallbackRequest) (string, error) {
+func (t *ReflectHandler) Setup(ctx context.Context, req CallbackRequest) (string, error) {
 	// we will receive event via http call, no setup is needed
 	return "", nil
 }
 
 // when we will stop listening for this event - Teardown() will be called for us to remove this event on external services
-func (t *ReflectEvent) Teardown(ctx context.Context, req CallbackRequest, handled bool) error {
+func (t *ReflectHandler) Teardown(ctx context.Context, req CallbackRequest, handled bool) error {
 	// we will receive event via http call, no teardown is needed
 	return nil
 }

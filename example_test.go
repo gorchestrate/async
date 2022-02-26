@@ -67,6 +67,10 @@ type MyEvent struct {
 	F func()
 }
 
+func (t MyEvent) Type() string {
+	return "myevent"
+}
+
 func (t MyEvent) Setup(ctx context.Context, req CallbackRequest) (string, error) {
 	return "", nil
 }

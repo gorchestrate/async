@@ -82,6 +82,10 @@ type DumbHandler struct {
 	F func()
 }
 
+func (t DumbHandler) Type() string {
+	return "dumb"
+}
+
 func (t DumbHandler) Setup(ctx context.Context, req CallbackRequest) (string, error) {
 	return "abc", nil
 }

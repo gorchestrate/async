@@ -6,6 +6,7 @@ import (
 )
 
 type WaitEvent struct {
+	Type    string
 	Req     CallbackRequest
 	Status  WaitEventStatus
 	Handled bool
@@ -202,7 +203,7 @@ func resumeState(ctx *resumeContext, state WorkflowState) error {
 		c.Callback.PC = ctx.t.PC
 		c.Callback.WorkflowID = ctx.s.ID
 		c.Callback.ThreadID = ctx.t.ID
-		ctx.t.WaitEvents = append(ctx.t.WaitEvents, WaitEvent{Req: c.Callback, Status: EventPendingSetup})
+		ctx.t.WaitEvents = append(ctx.t.WaitEvents, WaitEvent{Type: c.Handler.Type(), Req: c.Callback, Status: EventPendingSetup})
 	}
 	ctx.t.Status = ThreadWaitingEvent
 	return nil

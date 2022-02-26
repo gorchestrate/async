@@ -360,6 +360,8 @@ func (s WaitEventsStmt) Resume(ctx *resumeContext) (*Stop, error) {
 }
 
 type Handler interface {
+	Type() string
+
 	Setup(ctx context.Context, req CallbackRequest) (string, error)
 
 	Handle(ctx context.Context, req CallbackRequest, input interface{}) (interface{}, error)
