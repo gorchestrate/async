@@ -376,6 +376,9 @@ func setup(ctx context.Context, wf WorkflowState, s *State, save Checkpoint) err
 // and out-of-order duplicated step execution - save() will be called to
 // checkpoint current state of the workflow.
 func Resume(ctx context.Context, wf WorkflowState, s *State, save Checkpoint) error {
+	if s.Status == WorkflowFinished {
+		return fmt.Errorf("workflow has already finished")
+	}
 	def := wf.Definition()
 	err := Validate(def)
 	if err != nil {
@@ -455,6 +458,9 @@ func HandleCallback(ctx context.Context, req CallbackRequest, wf WorkflowState, 
 	for _, t := range s.Threads {
 		if req.ThreadID != "" && req.ThreadID != t.ID {
 			continue
+		}
+		if t.Status != ThreadWaitingEvent {
+			return nil, fmt.Errorf("thread %v is not waiting for events", t.ID)
 		}
 		for i, evt := range t.WaitEvents {
 			if evt.Req.Name != req.Name {
