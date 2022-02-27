@@ -441,7 +441,24 @@ loop:
 		break
 	}
 
-	return setup(ctx, wf, s, save)
+	err = setup(ctx, wf, s, save)
+	if err != nil {
+		return err
+	}
+	s.UpdateWorkflowsStatus()
+	return nil
+}
+
+func (s *State) UpdateWorkflowsStatus() {
+	if s.Status == WorkflowFinished {
+		return
+	}
+	s.Status = WorkflowWaiting
+	for _, t := range s.Threads {
+		if t.Status == ThreadResuming {
+			s.Status = WorkflowResuming
+		}
+	}
 }
 
 // Handle incoming event. This func will only execute callback handler and update the state
@@ -490,6 +507,7 @@ func HandleCallback(ctx context.Context, req CallbackRequest, wf WorkflowState, 
 			}
 			t.Status = ThreadResuming
 			t.PC++
+			s.UpdateWorkflowsStatus()
 			return out, nil
 		}
 	}
