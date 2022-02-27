@@ -103,20 +103,23 @@ func Step(name string, action func() error) StmtStep {
 }
 
 type SwitchCase struct {
-	Name string
-	Cond bool
-	Stmt Stmt
+	Name    string
+	Cond    bool
+	Stmt    Stmt
+	Default bool
 }
 
 func (s SwitchCase) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
-		Type string
-		Name string
-		Stmt Stmt
+		Type    string
+		Name    string
+		Stmt    Stmt
+		Default bool
 	}{
-		Type: "case",
-		Name: s.Name,
-		Stmt: s.Stmt,
+		Type:    "case",
+		Name:    s.Name,
+		Stmt:    s.Stmt,
+		Default: s.Default,
 	})
 }
 
@@ -186,10 +189,12 @@ func (s *SwitchStmt) ElseIf(cond bool, name string, sec ...Stmt) *SwitchStmt {
 	return s
 }
 
-func (s *SwitchStmt) Else(sec ...Stmt) *SwitchStmt {
+func (s *SwitchStmt) Else(name string, sec ...Stmt) *SwitchStmt {
 	s.Cases = append(s.Cases, SwitchCase{
-		Cond: true,
-		Stmt: Section(sec),
+		Cond:    true,
+		Name:    name,
+		Stmt:    Section(sec),
+		Default: true,
 	})
 	return s
 }
@@ -202,11 +207,12 @@ func Case(cond bool, name string, sec Stmt) SwitchCase {
 	}
 }
 
-func Default(sec Stmt) SwitchCase {
+func Default(name string, sec Stmt) SwitchCase {
 	return SwitchCase{
-		Name: "default",
-		Cond: true,
-		Stmt: sec,
+		Name:    name,
+		Cond:    true,
+		Stmt:    sec,
+		Default: true,
 	}
 }
 

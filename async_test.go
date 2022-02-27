@@ -358,7 +358,7 @@ func (t *TestIfElseWorkflow) Definition() Section {
 			}),
 		).ElseIf(t.Str == "c", "check2",
 			Return(),
-		).Else(
+		).Else("checks failed",
 			Step("duplicate", func() error {
 				t.Str += t.Str
 				return nil
