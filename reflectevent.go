@@ -27,7 +27,7 @@ type Empty struct {
 
 // This is an example of how to create your custom events
 type ReflectHandler struct {
-	Handler interface{}
+	Handler interface{} `json:"-"`
 }
 
 func (h ReflectHandler) inputSchema() ([]byte, error) {
