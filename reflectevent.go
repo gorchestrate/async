@@ -33,10 +33,10 @@ type ReflectHandler struct {
 func (h ReflectHandler) inputSchema() ([]byte, error) {
 	fv := reflect.ValueOf(h.Handler)
 	ft := fv.Type()
-	if ft.NumIn() != 1 {
-		return nil, fmt.Errorf("async http handler should have 1 input") // TODO: ctx support?
+	if ft.NumIn() != 2 {
+		return nil, fmt.Errorf("async http handler should have 2 inputs")
 	}
-	if ft.In(0).Kind() != reflect.Struct {
+	if ft.In(1).Kind() != reflect.Struct {
 		return nil, fmt.Errorf(("input param is not a struct"))
 	}
 	return json.Marshal(jsonschema.ReflectFromType(ft.In(0)))
@@ -72,7 +72,7 @@ func (h ReflectHandler) MarshalJSON() ([]byte, error) {
 	if ft.NumOut() != 2 {
 		return nil, fmt.Errorf("async http handler should have 2 outputs")
 	}
-	if ft.In(0).Kind() != reflect.Struct {
+	if ft.In(1).Kind() != reflect.Struct {
 		return nil, fmt.Errorf(("input param is not a struct"))
 	}
 	if ft.Out(0).Kind() != reflect.Struct {
@@ -81,7 +81,7 @@ func (h ReflectHandler) MarshalJSON() ([]byte, error) {
 	r := jsonschema.Reflector{
 		FullyQualifyTypeNames: true,
 	}
-	in := r.ReflectFromType(ft.In(0))
+	in := r.ReflectFromType(ft.In(1))
 	out := r.ReflectFromType(ft.Out(0))
 	return json.Marshal(struct {
 		Type   string
@@ -115,24 +115,24 @@ func (h *ReflectHandler) Handle(ctx context.Context, req CallbackRequest, input 
 	}
 	fv := reflect.ValueOf(h.Handler)
 	ft := fv.Type()
-	if ft.NumIn() != 1 {
+	if ft.NumIn() != 2 {
 		return nil, fmt.Errorf("async http handler should have 1 input") // TODO: ctx support?
 	}
 	if ft.NumOut() != 2 {
 		return nil, fmt.Errorf("async http handler should have 2 outputs")
 	}
-	if ft.In(0).Kind() != reflect.Struct {
+	if ft.In(1).Kind() != reflect.Struct {
 		return nil, fmt.Errorf(("input param is not a struct"))
 	}
 	if ft.Out(0).Kind() != reflect.Struct {
 		return nil, fmt.Errorf(("first output param is not a struct"))
 	}
-	dstInput := reflect.New(ft.In(0))
+	dstInput := reflect.New(ft.In(1))
 	err = json.Unmarshal(input.([]byte), dstInput.Interface())
 	if err != nil {
 		return nil, fmt.Errorf("can't unmarshal input: %v", err)
 	}
-	res := fv.Call([]reflect.Value{dstInput.Elem()})
+	res := fv.Call([]reflect.Value{reflect.ValueOf(ctx), dstInput.Elem()})
 	if res[1].Interface() != nil {
 		outErr, ok := res[1].Interface().(error)
 		if !ok {
