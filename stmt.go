@@ -71,7 +71,7 @@ func (s Section) Resume(ctx *resumeContext) (*Stop, error) {
 
 type StmtStep struct {
 	Name   string
-	Action func() error `json:"-"`
+	Action func(ctx context.Context) error `json:"-"`
 }
 
 func (s StmtStep) MarshalJSON() ([]byte, error) {
@@ -95,7 +95,7 @@ func (s StmtStep) Resume(ctx *resumeContext) (*Stop, error) {
 }
 
 // if action func returns error - step will be retried automatically.
-func Step(name string, action func() error) StmtStep {
+func Step(name string, action func(ctx context.Context) error) StmtStep {
 	return StmtStep{
 		Name:   name,
 		Action: action,
@@ -219,7 +219,7 @@ func Default(name string, sec Stmt) SwitchCase {
 type WaitCondStmt struct {
 	Name    string
 	Cond    bool
-	Handler func() `json:"-"` // executed when cond is true.
+	Handler func(ctx context.Context) `json:"-"` // executed when cond is true.
 }
 
 func (s WaitCondStmt) MarshalJSON() ([]byte, error) {
@@ -234,7 +234,7 @@ func (s WaitCondStmt) MarshalJSON() ([]byte, error) {
 }
 
 // Wait statement wait for condition to be true.
-func WaitFor(label string, cond bool, handler func()) WaitCondStmt {
+func WaitFor(label string, cond bool, handler func(ctx context.Context)) WaitCondStmt {
 	return WaitCondStmt{
 		Cond:    cond,
 		Name:    label,
@@ -244,7 +244,7 @@ func WaitFor(label string, cond bool, handler func()) WaitCondStmt {
 
 func (f WaitCondStmt) Resume(ctx *resumeContext) (*Stop, error) {
 	if ctx.Running && f.Cond {
-		f.Handler() // if condition is already met - execute handler immediately
+		f.Handler(ctx.ctx) // if condition is already met - execute handler immediately
 		return nil, nil
 	}
 	if ctx.Running && !f.Cond { // if condition is false - let's wait for it

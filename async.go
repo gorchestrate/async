@@ -254,7 +254,7 @@ func exec(ctx context.Context, state WorkflowState, t *Thread, s *State) error {
 	if step == nil {
 		return fmt.Errorf("can't find step: %v", err)
 	}
-	err = step.Action()
+	err = step.Action(ctx)
 	if err != nil {
 		return ErrExec{e: err, Step: t.CurStep}
 	}
@@ -275,7 +275,7 @@ func checkConditions(ctx context.Context, state WorkflowState, s *State) (bool, 
 			}
 			if s.Cond {
 				if s.Handler != nil {
-					s.Handler()
+					s.Handler(ctx)
 				}
 				// we should have syncronous handler to avoid concurrency issues.
 				// i.e. If condition was true, but then another thread resumes and it becomes false.
@@ -303,7 +303,7 @@ const (
 // Checkpoint is used to save workflow state while it's being processed
 // You may want to checkpoint/save your workflow only for specific checkpoint types
 // to increase performance and avoid unnecessary saves.
-type Checkpoint func(t CheckpointType) error
+type Checkpoint func(ctx context.Context, t CheckpointType) error
 
 func teardown(ctx context.Context, wf WorkflowState, s *State, save Checkpoint) error {
 	for _, t := range s.Threads {
@@ -323,7 +323,7 @@ func teardown(ctx context.Context, wf WorkflowState, s *State, save Checkpoint) 
 				t.WaitEvents[i].Status = EventTeardownError
 				continue
 			}
-			err = save(CheckpointAfterTeardown)
+			err = save(ctx, CheckpointAfterTeardown)
 			if err != nil {
 				return err
 			}
@@ -358,7 +358,7 @@ func setup(ctx context.Context, wf WorkflowState, s *State, save Checkpoint) err
 			}
 			t.WaitEvents[i].Status = EventSetup
 			t.WaitEvents[i].Req.SetupData = d
-			err = save(CheckpointAfterSetup)
+			err = save(ctx, CheckpointAfterSetup)
 			if err != nil {
 				return err
 			}
@@ -405,7 +405,7 @@ loop:
 				if err != nil {
 					return err
 				}
-				err = save(CheckpointAfterStep)
+				err = save(ctx, CheckpointAfterStep)
 				if err != nil {
 					return err
 				}
@@ -420,7 +420,7 @@ loop:
 				if err != nil {
 					return err
 				}
-				err = save(CheckpointAfterResume)
+				err = save(ctx, CheckpointAfterResume)
 				if err != nil {
 					return err
 				}
@@ -432,7 +432,7 @@ loop:
 			return err
 		}
 		if found {
-			err = save(CheckpointAfterCondition)
+			err = save(ctx, CheckpointAfterCondition)
 			if err != nil {
 				return err
 			}

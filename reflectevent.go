@@ -51,16 +51,16 @@ func (h ReflectHandler) Schemas() (in *jsonschema.Schema, out *jsonschema.Schema
 	if ft.Out(0).Kind() != reflect.Struct {
 		return nil, nil, fmt.Errorf(("input param is not a struct"))
 	}
-	if ft.NumIn() != 1 {
-		return nil, nil, fmt.Errorf("async http handler should have 1 input") // TODO: ctx support?
+	if ft.NumIn() != 2 {
+		return nil, nil, fmt.Errorf("async http handler should have 2 inputs: ctx & struct") // TODO: ctx support?
 	}
-	if ft.In(0).Kind() != reflect.Struct {
+	if ft.In(1).Kind() != reflect.Struct {
 		return nil, nil, fmt.Errorf(("input param is not a struct"))
 	}
 	r := jsonschema.Reflector{
 		FullyQualifyTypeNames: true,
 	}
-	return r.ReflectFromType(ft.In(0)), r.ReflectFromType(ft.Out(0)), nil
+	return r.ReflectFromType(ft.In(1)), r.ReflectFromType(ft.Out(0)), nil
 }
 
 func (h ReflectHandler) MarshalJSON() ([]byte, error) {
