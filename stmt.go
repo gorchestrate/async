@@ -234,6 +234,8 @@ func (s WaitCondStmt) MarshalJSON() ([]byte, error) {
 }
 
 // Wait statement wait for condition to be true.
+// This condition is checked after each step of the workflow.
+// Which means you can simply wait for workflow state to meet specific condition.
 func WaitFor(label string, cond bool, handler func()) WaitCondStmt {
 	return WaitCondStmt{
 		Cond:    cond,

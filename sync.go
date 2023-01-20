@@ -1,5 +1,6 @@
 package async
 
+// Example implementation of WorkGroup using WaitFor condition
 type WG struct {
 	I int
 }

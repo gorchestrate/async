@@ -8,7 +8,7 @@ I've spend 4 years to come up with this particular approach of handling workflow
 
 #### Example App
 https://github.com/gorchestrate/pizzaapp
-This is an example of how you can use Google Cloud to build fully serverless stateful workflows, that could be scaled horizontally without too much efforts.
+This is an example of how you can use Google Cloud to build serverless workflows.
 
 #### Example Code
 ```Go
@@ -22,26 +22,30 @@ func (s *MyWorkflow) Definition() Section {
 	return S(
 		Step("first action", func() error {
 			s.User = "You can execute arbitrary code right in the workflow definition"
-			log.Printf("No need for fancy definition/action separation")
+			log.Printf("No need for abstractions or fancy separation of actions from workflow logic")
 			return nil
 		}),
-		If(s.User == "",
+		If(s.User == "", "if user is empty",
 			Step("second action", func() error {
-				log.Printf("use if/else to branch your workflow")
+				log.Printf("execute some code")
 				return nil
 			}),
 			Return(),
 		),
-		Select("and then wait for some events",
-			On("myEvent", MyEvent{
+		Wait("for external events",
+			OnEvent("genericEvent", func(input Info) (Info, error) {
+				log.Print("received generic event")
+				return input, nil
+			}),
+			On("myCustomEvent", MyEvent{
 				F: func() {
-					log.Printf("this is executed synchronously when HandleEvent() is Called")
+					log.Printf("received custom event, that has 'Setup()' and 'Teardown()' functions")
 				},
 			},
-				Step("and then continue the workflow", func() error {
+				Step("separate branch of cations after event received", func() error {
 					return nil
 				}),
-				s.Finish("timed out"),
+				s.Finish("workflow finished"),
 			),
 		),
 		Go("thread2", S(
@@ -72,40 +76,63 @@ func (s *MyWorkflow) Finish(output string) Stmt {
 
 
 ## Architecture
-Gorchestrate has stateless API and does not come with a database or scheduler. 
-It's intended to be integrated into applications, which will determine how & when workflows will be executed.
+Gorchestrate workflow consists of 3 parts:
 
-Think this is a stateful script - you want to execute some steps and want to save the state of the script in persistent storage and then resume the script when some event comes in.
+* Workflow data
+	* `type MyWorkflow struct {`
+* Workflow code
+	* `func (s *MyWorkflow) Definition() Section {`
+* Workflow state 
+	* `async.State`
 
-There are 2 ways to execute workflow:
-* Scheduled call of Resume() method. This is called when workflow starts or event was handled and we need to continue execution.
-* Explicit call of HandleEvent() method. This is called whenever some event happens.
+How to create new worfkflow instance:
+* Populate your Workflow data with initial values.
+* Create new state via `async.NewState()`
+* Call Resume()
+* Save result to DB
 
-Brief description of how workflows are executed:
-0. Workflow is created and Resume() call is scheduled.
-1. Scheduled Resume() will execute workflow till point when workflow is blocked and waiting for events. 
-2. Then it will execute Setup() for all events we are waiting for. This allows you to register your events on external services.
-3. When event arrives - you pass it to HandleEvent() method. This handles event and schedules Resume() call
-4. Resume() will execute Teardown() for all events we were waiting for. This allows you to deregister your events on external services.
-5. Go to point 1 if main thread is not yet exited.
+How to resume existing workflow:
+* Load workflow that needs to be resumed from DB
+* Call Resume()
+* Save result to DB
 
+How to submit event to workflow:
+* Load workflow from DB
+* Call HandleCallback()
+* Save result to DB
 
+### How to update workflow code?
+* Each statement in workflow has a name
+* You can update workflow as you want, with a few exceptions, but don't:
+	* Rename/delete/move in-flight statements (steps that are executing or events we are waiting for)
+	* Rename/delete active threads (Go statements)
+	* Change the type of statements (i.e. same name, but different type)
+* Following process is advised for deletion of the workflow code:
+	* Skip statements you want to delete with If(false) condition
+	* Deploy new code
+	* Check DB that no workflow state contains these statements
+	* Delete statements
+	* Deploy new code with deleted statements
 
-### How library knows where to resume the workflow from?
-* All threads and their current steps are located in workflows State.
-* When Resume() is called - we try to continue all steps in all threads, from CurStep specified in thread. So if you add a new step to the workflow - it will not break the execution flow. Removing step is harder, since you need to make sure that the step is not currently executed and it's removal won't break the logic of your workflow.
-* When HandleEvent() is called - we find step waiting for this callback and continue execution. Calling HandleEvent() with event that workflow is not waiting for will return an error.
+### How to update workflow execution state?
+* If for some reason your workflow is invalid state and you want to fix it - you can easily do that
+	* Update workflow data with proper values
+	* Update workflow state with the name of step you want to execute next (i.e. goto)
+	* Update all thread of the workflow, add / delete threads if necessary.
+	* Save to DB
+
 
 ### What about performance?
-Performance is mainly limited by DB operations, rather than library itself.
+Performance is mainly limited by DB operations and workflow actions, rather than library itself.
 To build stateful workflows you have to lock, save & unlock the workflow for each execution step, which may be slow and resource-hungry.
 
-Here's a benchmark for a complete workflow execution consisting of 19 execution steps, including loops, steps & event handlers.
+Here's a benchmark for a complete workflow execution consisting of 19 execution steps, including loops, steps & event handlers. 
 ```
 go test -bench=. -benchtime=1s
 cpu: AMD Ryzen 7 4700U with Radeon Graphics         
 BenchmarkXxx-8   	   33121	     35601 ns/op
 ```
+1.9 microseconds per step or 500k step/second.
 
 ### Is it production ready?
 It will reliably work for straightforward workflows that are just doing simple steps. There's 80% coverage and tests are covering basic flows.
@@ -116,6 +143,5 @@ For advanced usage, such as workflows with concurrency or custom event handlers 
 I'm keeping this library as 0.9.x version, since API may change a little bit in the future (for example we may want to pass context to callbacks in future), but it should be easy to fix.
 
 I'd be glad if some really smart guy will help me out to make this library better or more popular)))
-
 
 Feedback is welcome!

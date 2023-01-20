@@ -98,7 +98,6 @@ func (tt *Threads) Find(id string) (*Thread, bool) {
 	return nil, false
 }
 
-// TODO: more robust validations
 func Validate(s Section) error {
 	var oErr error
 	sections := map[string]bool{}
@@ -124,7 +123,7 @@ func Validate(s Section) error {
 			sections[x.Name] = true
 			for _, v := range x.Cases {
 				if sections[v.Callback.Name] {
-					oErr = fmt.Errorf("duplicate select name: %v", v.Callback.Name)
+					oErr = fmt.Errorf("duplicate event name: %v", v.Callback.Name)
 					return true
 				}
 				sections[v.Callback.Name] = true
@@ -275,10 +274,12 @@ func checkConditions(ctx context.Context, state WorkflowState, s *State) (bool, 
 			}
 			if s.Cond {
 				if s.Handler != nil {
+					// handlers for conditions are executed synchronously to avoid concurrency issues between
+					// conditions.
+					// This can happen when 2 WaitFor handler changes workflow data affecting other WaitFor handler in
+					// another thread
 					s.Handler()
 				}
-				// we should have syncronous handler to avoid concurrency issues.
-				// i.e. If condition was true, but then another thread resumes and it becomes false.
 				t.Status = ThreadResuming
 				return true, nil
 			}
@@ -372,10 +373,12 @@ func setup(ctx context.Context, wf WorkflowState, s *State, save Checkpoint) err
 	return nil
 }
 
-// Resume will continue workflow, executing steps in a process.
+// Resume will continue asynchronous part of workflow, executing steps in a process.
 // Resume may fail in the middle of the processing. To avoid data loss
 // and out-of-order duplicated step execution - save() will be called to
 // checkpoint current state of the workflow.
+//
+// Resume will only unblock when all workflow threads are blocked (or process is finished)
 func Resume(ctx context.Context, wf WorkflowState, s *State, save Checkpoint) error {
 	if s.Status == WorkflowFinished {
 		return fmt.Errorf("workflow has already finished")
@@ -396,7 +399,7 @@ func Resume(ctx context.Context, wf WorkflowState, s *State, save Checkpoint) er
 loop:
 	for i := 0; s.Status == WorkflowResuming; i++ {
 		if i > 10000 {
-			return fmt.Errorf("resume didn't finish after 10000 steps")
+			return fmt.Errorf("resume didn't finish after 10000 steps, possible infinite loop? ")
 		}
 		for _, t := range s.Threads {
 			switch t.Status {
